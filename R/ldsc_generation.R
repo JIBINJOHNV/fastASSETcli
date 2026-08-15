@@ -267,7 +267,7 @@ resolve_bcftools_executable <- function(value) {
 
 bcftools_failure_message <- function(label, status, stderr_file) {
   details <- if (file.exists(stderr_file)) {
-    tail(readLines(stderr_file, warn = FALSE), 20L)
+    utils::tail(readLines(stderr_file, warn = FALSE), 20L)
   } else {
     character()
   }
@@ -440,7 +440,7 @@ standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
     duplicates <- unique(table[["SNP"]][duplicated(table[["SNP"]])])
     stop(
       "VCF contains duplicate SNP identifiers after filtering: ",
-      paste(head(duplicates, 10L), collapse = ", "),
+      paste(utils::head(duplicates, 10L), collapse = ", "),
       if (length(duplicates) > 10L) " ..." else "",
       ". Normalize/de-duplicate the VCF before analysis: ", source_file
     )
