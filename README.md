@@ -1,46 +1,79 @@
-# Installable fastASSET CLI package
+# fastASSETcli
 
-This repository installs the reviewed pipeline as the R package `fastASSETcli` and
-provides the shell command `fastasset`. Version 0.4.3 uses one per-trait
-summary-statistic manifest as the complete analysis input. It can either load an
-existing GenomicSEM LDSC object or generate the object automatically from
-tabular or GWAS-VCF summary statistics before running FastASSET. The multi-trait
-wide table required internally by FastASSET is constructed automatically; there
-is no `--fastasset-input` option. The package does not install under the name
-`fastASSET`, so it does not overwrite or shadow the upstream project.
+`fastASSETcli` is an installable R package with a shell command for running a
+reference-aligned FastASSET analysis across many traits. One per-trait summary
+statistics manifest is the only analysis input. The package builds the internal
+wide FastASSET table, obtains the GenomicSEM LDSC intercept covariance, aligns
+trait order, runs directional FastASSET and writes auditable results and QC.
 
-## One-command installation
+The package can:
 
-From this directory:
+- read tabular summary statistics or GWAS-VCF/BCF files;
+- use an existing GenomicSEM LDSC object or generate one automatically;
+- process quantitative and binary traits using the required sample-size rules;
+- align effects across traits without requiring `--fastasset-input`;
+- run the positive/negative FastASSET search and ASSET Meta analysis; and
+- resume compatible preparation, LDSC and analysis outputs.
+
+## Start here
+
+- [Complete workflow, scientific rules and full flowchart](inst/docs/WORKFLOW.md)
+- [Reference comparison and severity-ranked corrections](inst/docs/REFERENCE_COMPARISON.md)
+- Run `fastasset --help` after installation for every CLI option and default.
+
+## Workflow at a glance
+
+```mermaid
+flowchart TD
+    A["Manifest: one row per trait"] --> B["Prepare and align summary statistics"]
+    B --> C["Load or generate GenomicSEM LDSC"]
+    C --> D["Normalize and reorder trait correlation"]
+    D --> E["Run directional FastASSET and Meta"]
+    E --> F["Results, QC, audits and provenance"]
+```
+
+The [complete workflow page](inst/docs/WORKFLOW.md) explains every processing
+step, decision, failure route and output.
+
+## Requirements
+
+| Requirement | When it is needed |
+|---|---|
+| R 4.1 or newer | Always |
+| `ASSET` and `data.table` | Always; installed by `install.sh` |
+| GenomicSEM | Automatic LDSC mode; installed by `install.sh` |
+| `gzip` | Always |
+| `bcftools` | Only when a manifest contains VCF/BCF files |
+| HapMap3 SNP list and LD-score reference | Only when generating LDSC automatically |
+| Linux or macOS | Required for more than one forked FastASSET worker |
+
+## Installation
+
+Clone the repository and run the installer:
 
 ```bash
+git clone https://github.com/JIBINJOHNV/fastASSETcli.git
+cd fastASSETcli
 chmod +x install.sh
 ./install.sh
 ```
 
-The installer:
-
-1. creates an isolated user R library under
-   `~/.local/share/fastassetcli/R-library`;
-2. installs `data.table`, Bioconductor `ASSET`, GenomicSEM, and their
-   dependencies when needed;
-3. installs the `fastASSETcli` R package; and
-4. links the executable to `~/.local/bin/fastasset`.
-
-If `~/.local/bin` is not already on `PATH`, add it:
+The installer creates an isolated R library under
+`~/.local/share/fastassetcli/R-library` and links the command to
+`~/.local/bin/fastasset`. If that directory is not on `PATH`, add it:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-Then verify:
+Verify the installation:
 
 ```bash
 fastasset --version
 fastasset --help
 ```
 
-The installation locations can be changed without a configuration file:
+Custom installation locations can be supplied without a configuration file:
 
 ```bash
 FASTASSET_R_LIB=/opt/R/fastasset \
@@ -48,10 +81,46 @@ FASTASSET_BIN_DIR=/opt/bin \
 ./install.sh
 ```
 
-Set `FASTASSET_SKIP_DEPENDENCIES=1` only when `ASSET`, `data.table`, and
-`GenomicSEM` are already visible to the selected R installation.
+The package is named `fastASSETcli`; it does not overwrite or shadow the
+upstream `fastASSET` project.
 
-## Run with an existing LDSC object
+## Step 1: Create the summary-statistics manifest
+
+Create a tab- or comma-delimited file with one row per trait. Only `TRAIT` and
+`FILE` are universally required.
+
+```text
+TRAIT              FILE                                N     SAMPLE  SAMPLE_PREV  POPULATION_PREV
+quantitative_1     /data/quantitative_1.tsv.gz         NA    NA      NA           NA
+binary_1           /data/binary_1.vcf.gz               NA    NA      NA           0.02
+```
+
+| Column | Required | Meaning |
+|---|---:|---|
+| `TRAIT` | Yes | Unique trait name. Manifest row order becomes the canonical FastASSET and LDSC order. |
+| `FILE` | Yes | Path to TSV/CSV, compressed table, VCF, VCF.GZ, VCF.BGZ or BCF. Relative paths are resolved from the manifest directory. |
+| `N` | Sometimes | Constant trait sample size when a tabular file has no per-SNP N/NEF column. Do not provide it for VCF/BCF. |
+| `SAMPLE` | Sometimes | Exact sample ID for a multi-sample VCF/BCF. Leave `NA` for one-sample VCFs and tabular files. |
+| `SAMPLE_PREV` | Binary tables | Sample prevalence. For binary VCFs it may be `NA` and is calculated from median NC/NCO. |
+| `POPULATION_PREV` | Binary traits | Population prevalence. Leave both prevalence fields `NA` for quantitative traits. |
+
+Accepted aliases include `NAME` for `TRAIT`, `SPREV` for `SAMPLE_PREV` and
+`PPREV` for `POPULATION_PREV`.
+
+For tabular inputs, FastASSET preparation needs SNP ID, A1, A2, BETA, SE and a
+sample-size source. Nonstandard column names can be mapped through the CLI:
+
+```bash
+--munge-column-map 'SNP=ID,A1=EA,A2=NEA,effect=BETA,SE=SE,N=NEF,P=P'
+```
+
+## Step 2: Choose how LDSC is obtained
+
+### Option A: Use an existing GenomicSEM LDSC object
+
+Use this mode when the complete trait set already has a saved GenomicSEM
+object containing `$I`. The object axes are recovered and reordered to the
+manifest order.
 
 ```bash
 fastasset \
@@ -59,7 +128,7 @@ fastasset \
   --ldsc-rdata /data/all_traits_LDSCoutput.RData \
   --ldsc-object-name LDSCoutput \
   --output-dir /results/fastasset \
-  --run-name quantitative_250_traits \
+  --run-name traits250 \
   --ncores 90 \
   --chunk-size 1000 \
   --scr-pthr 0.05 \
@@ -67,62 +136,11 @@ fastasset \
   --include-meta TRUE
 ```
 
-Everything is passed through the shell CLI; no YAML or other configuration
-file is read.
+### Option B: Generate LDSC automatically
 
-## Generate LDSC automatically
-
-When `--ldsc-rdata` is omitted, the CLI runs `GenomicSEM::munge()`, runs
-`GenomicSEM::ldsc()`, saves the complete GenomicSEM object separately, and then
-continues with the same audited FastASSET workflow.
-
-Create a tab- or comma-delimited manifest with exactly one row per trait. Each
-`FILE` may be an ordinary summary-statistic table or a `.vcf`, `.vcf.gz`,
-`.vcf.bgz`, or `.bcf` file:
-
-```text
-TRAIT    FILE                              N    SAMPLE    SAMPLE_PREV    POPULATION_PREV
-trait_1  /data/trait_1_sumstats.tsv.gz     NA   NA        NA             NA
-trait_2  /data/trait_2.vcf.gz              NA   NA        NA             NA
-```
-
-The manifest row order is the canonical trait order for both the internally
-constructed FastASSET table and LDSC. When an existing LDSC object is supplied,
-both axes of its intercept matrix are reordered to this manifest order.
-`NAME`, `SPREV`, and `PPREV` are accepted as aliases for compatibility with the
-supplied pipeline.
-
-For quantitative traits, set both prevalence fields to `NA`. `N` is optional:
-leave it `NA` when each raw summary-statistic file already contains a valid
-sample-size column. A manifest `N` is a constant per-trait sample size used by
-both internal FastASSET input construction and GenomicSEM munging when a
-per-SNP sample-size column is absent.
-
-For VCF/BCF inputs, leave manifest `N` as `NA`. A one-sample VCF is selected
-automatically. If a VCF has more than one sample, set `SAMPLE` to the exact VCF
-sample ID. VCF conversion applies these audited rules:
-
-| Input situation | LDSC sample size | Prevalence handling |
-|---|---|---|
-| `POPULATION_PREV` supplied | Per-SNP total sample size `N = FORMAT/NC + FORMAT/NCO` | Binary trait; one LDSC `SAMPLE_PREV` is calculated as `median(NC)/(median(NC)+median(NCO))` across valid SNP rows. Header totals are provenance only. |
-| `POPULATION_PREV` is `NA` | Per-SNP `N = FORMAT/NEF` | Quantitative trait; both prevalences remain `NA`. Here `NEF` is used directly as total analyzed sample size. |
-
-The supplied GWAS-VCF convention is handled explicitly: `BETA=FORMAT/ES`,
-`A1=ALT`, `A2=REF`, `MAF=min(FORMAT/AF, 1-FORMAT/AF)`,
-`INFO=FORMAT/SI` when present, and raw `P=10^(-FORMAT/LP)`. Extremely small P values that
-cannot be represented by R are capped at `.Machine$double.xmin`, never changed
-to zero. A VCF declaring `StudyType=CaseControl` without
-`POPULATION_PREV` is rejected.
-
-For every TSV trait file, input construction identifies SNP ID, A1, A2, BETA,
-SE and sample size. Quantitative `NEF` is used directly as total analyzed N.
-For binary traits, the original fastASSET definition is used:
-`Neff = NCASE*NCONTROL/(NCASE+NCONTROL)`. If case/control columns are absent,
-the equivalent `N*SAMPLE_PREV*(1-SAMPLE_PREV)` is used. Effect alleles are
-checked across all traits. An exactly swapped allele pair causes BETA to be
-flipped. For an incompatible pair, that trait's BETA, SE, and NEF are set to
-`NA` at the SNP and the failure is logged; compatible traits at the same SNP
-remain available for analysis.
+Omit `--ldsc-rdata` and provide HapMap3 and LD-score references. The CLI runs
+`GenomicSEM::munge()` per trait, runs `GenomicSEM::ldsc()`, saves the complete
+LDSC object and then continues to FastASSET.
 
 ```bash
 fastasset \
@@ -130,7 +148,7 @@ fastasset \
   --hm3 /refs/w_hm3.snplist \
   --ld-ref /refs/eur_w_ld_chr \
   --output-dir /results/fastasset \
-  --run-name quantitative_250_traits \
+  --run-name traits250 \
   --ncores 90 \
   --munge-cores 90 \
   --vcf-cores 90 \
@@ -140,112 +158,125 @@ fastasset \
   --include-meta TRUE
 ```
 
-If the input columns use nonstandard names, pass a GenomicSEM mapping entirely
-through the CLI. For example:
+Use `--wld-ref` only when LD-score weights are stored separately from
+`--ld-ref`. `bcftools` must be on `PATH` for VCF/BCF inputs, or its executable
+must be supplied with `--bcftools /path/to/bcftools`.
 
-```bash
---munge-column-map 'SNP=ID,A1=EA,A2=NEA,effect=BETA,SE=SE,N=NEF,P=P'
-```
+Everything is supplied through the shell CLI; no YAML configuration file is
+read.
 
-Use `--wld-ref` only when the LD-score weights are stored separately from
-`--ld-ref`. By default, the same directory is used for both.
+## Input and scientific rules
 
-`bcftools` must be on `PATH` for VCF inputs. Alternatively provide it through
-the CLI, for example `--bcftools /opt/bcftools/bin/bcftools`. This dependency
-is not required when every manifest `FILE` is already tabular.
+### Sample size
 
-Automatic outputs are written under:
+| Trait/input type | LDSC N | FastASSET NEF |
+|---|---|---|
+| Quantitative table | Per-SNP NEF/N, or manifest `N` | Same value, used directly as total analyzed N |
+| Binary table with NC/NCO | Per-SNP total N or manifest `N` | `NC*NCO/(NC+NCO)` |
+| Binary table without NC/NCO | Per-SNP total N or manifest `N` | `N*SAMPLE_PREV*(1-SAMPLE_PREV)` |
+| Quantitative VCF | `FORMAT/NEF` | `FORMAT/NEF`, used directly |
+| Binary VCF | `FORMAT/NC + FORMAT/NCO` | `FORMAT/NC*FORMAT/NCO/(FORMAT/NC+FORMAT/NCO)` |
+
+For a binary VCF, one LDSC sample prevalence is calculated as
+`median(NC)/(median(NC)+median(NCO))` across valid SNP rows. VCF header case and
+control totals are retained only as provenance.
+
+### VCF conversion
+
+GWAS-VCF fields are interpreted as follows:
+
+- `A1=ALT`, `A2=REF` and `BETA=FORMAT/ES`;
+- `P=10^(-FORMAT/LP)`, with unrepresentably small values capped at the smallest
+  positive R double;
+- `MAF=min(FORMAT/AF, 1-FORMAT/AF)`;
+- `INFO=FORMAT/SI` when present; and
+- a VCF declaring `StudyType=CaseControl` requires `POPULATION_PREV`.
+
+### Cross-trait allele alignment
+
+The first observed allele pair for each SNP establishes its reference
+orientation.
+
+| Incoming pair | Action |
+|---|---|
+| Exact A1/A2 match | Keep BETA |
+| Exact A1/A2 swap | Multiply BETA by -1 |
+| Incompatible pair | Set BETA, SE and NEF to `NA` for that trait at that SNP and record the failure |
+
+Incompatible observations are saved in
+`fastasset_failed_allele_alignments.tsv`. Before ASSET is called, invalid or
+missing trait observations are removed and the correlation matrix is subset to
+the remaining traits. If fewer than `--min-available-traits` remain, the SNP is
+not tested and receives `INSUFFICIENT_VALID_TRAITS` in QC.
+
+## Recommended settings for 200–250 traits
 
 ```text
-<output-dir>/<run-name>_prepared_input_<signature>/
-├── <run-name>_fastasset_wide.tsv.gz
-├── fastasset_allele_reference.tsv.gz
-├── fastasset_input_build_audit.tsv
-├── fastasset_failed_allele_alignments.tsv
-├── manifest_resolved.tsv
-├── input_preparation_provenance.tsv
-└── vcf_converted/                    # present only for VCF/BCF inputs
-
-<output-dir>/<run-name>_generated_ldsc_<signature>/
-├── <run-name>_LDSCoutput.RData
-├── ldsc_manifest_resolved.tsv
-├── ldsc_generation_provenance.tsv
-├── <run-name>_ldsc.log
-└── munged/
+--ncores 90
+--munge-cores 90
+--vcf-cores 90
+--chunk-size 1000
+--scr-pthr 0.05
+--max-traits-per-side 16
+--min-available-traits 2
+--include-meta TRUE
 ```
 
-The signature includes the trait order, summary-statistic metadata, reference
-metadata, prevalence values, and LDSC/munging settings. A completed matching
-object is reused; signature-incompatible or incomplete outputs are not
-silently reused.
+The default per-direction guard is 16 screened traits. Values above 16 are
+sensitivity settings and the CLI permits at most 30. More CPUs parallelize SNP
+chunks; they do not parallelize subset enumeration within one SNP.
 
-FastASSET input construction creates the SNP-ID union once and fills it by
-indexed matching; it does not repeatedly merge the growing wide table. The
-build audit reports, for every trait, exact allele matches, swapped matches and
-BETA flips, SNPs that establish a new reference orientation, SNPs absent from
-that trait after forming the final union, and incompatible matches. Each
-incompatible SNP-trait observation is written to
-`fastasset_failed_allele_alignments.tsv`; its BETA, SE, and NEF are stored as
-`NA` in the wide table. Before calling ASSET, the wrapper removes non-finite
-trait observations and subsets the correlation matrix to the remaining valid
-traits. If fewer than `--min-available-traits` remain, the SNP is not sent to
-ASSET and receives `INSUFFICIENT_VALID_TRAITS` in the analysis QC output.
+For more than 18 traits, current GenomicSEM increases the LDSC jackknife block
+count to `((traits+1)*(traits+2)/2)+1`. Munging can use multiple workers, but
+`GenomicSEM::ldsc()` itself does not expose a worker-count argument.
 
-Important for 200–250 traits: current GenomicSEM automatically increases the
-jackknife blocks above 18 traits to
-`((number_of_traits + 1) * (number_of_traits + 2) / 2) + 1`. Munging uses
-`--munge-cores`, but `GenomicSEM::ldsc()` itself does not expose a worker-count
-argument. The CLI reports this before LDSC starts.
+## Main outputs
 
-## Manual R package installation
+| Output | Purpose |
+|---|---|
+| `*_fastasset_results.tsv.gz` | Positive/negative directional subset results |
+| `*_fastasset_meta.tsv.gz` | ASSET fixed-effect Meta result for screened, selection-adjusted traits |
+| `*_fastasset_qc.tsv.gz` | Per-SNP status, severity, valid/invalid traits, direction counts and runtime |
+| `*_fastasset_summary.tsv` | Counts by QC status and severity |
+| `fastasset_failed_allele_alignments.tsv` | Every excluded incompatible SNP–trait observation |
+| `*_LDSCoutput.RData` | Automatically generated GenomicSEM LDSC object |
+| `trait_correlation_normalized.tsv.gz` | Normalized and reordered correlation used by FastASSET |
+| `analysis_settings.tsv` | Resolved scientific, compute and provenance settings |
 
-If dependencies are already installed, the package directory can also be
-installed normally:
+Prepared input, automatic LDSC and FastASSET analysis each use separate
+signature-addressed directories. Completed compatible work is reused on rerun;
+partial or signature-incompatible work is not silently reused. The
+[complete workflow page](inst/docs/WORKFLOW.md#output-directory-structure)
+lists every important output and directory.
+
+## Manual package installation
+
+If dependencies are already installed:
 
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.4.3.tar.gz
+R CMD INSTALL release/fastASSETcli_0.4.4.tar.gz
 ```
 
-The executable inside an installed package can be located with:
+## Scientific behavior in one place
 
-```bash
-Rscript -e 'cat(system.file("exec", "fastasset", package="fastASSETcli"))'
-```
-
-## Scientific behavior
-
-- The manifest is the only summary-statistic input; its row order defines the
-  trait order, and the FastASSET wide table is generated internally.
-- Quantitative `NEF` is used directly as total analyzed sample size.
-- Binary fastASSET `Neff` is calculated as
-  `NCASE*NCONTROL/(NCASE+NCONTROL)`, matching the upstream reference.
-- Incompatible allele pairs exclude only the affected SNP-trait observation;
-  BETA, SE, and NEF become `NA`, the failure is logged, and compatible traits
-  at the SNP continue through FastASSET.
-- Automatic LDSC accepts tabular or GWAS-VCF manifest files; VCF binary
-  per-SNP total sample size is `NC+NCO`, and its trait-level sample prevalence
-  is `median(NC)/(median(NC)+median(NCO))`. Quantitative VCF `NEF` is used
-  directly as total sample size.
-- GenomicSEM `$I` is loaded from an existing object or generated and saved as a
-  separate `.RData` file.
-- Trait names are recovered from `I`, `S`, or `S_Stand` and reordered to the
-  manifest row order.
-- The LDSC covariance is normalized as `D^(-1/2) I D^(-1/2)`.
-- ASSET is called with `side=2`, `search=2`, and `meta=TRUE` by default.
+- Manifest row order is canonical for FastASSET and both LDSC matrix axes.
+- GenomicSEM `$I` is loaded or generated, then normalized as
+  `D^(-1/2) I D^(-1/2)` and checked for positive definiteness.
+- ASSET is called with `side=2`, `search=2` and `meta=TRUE` by default.
+- Meta output contains screened, selection-adjusted traits; it is not an
+  ordinary fixed-effect meta-analysis of every original trait.
 - The primary guard remains 16 screened traits per direction.
-- Meta output is across screened, selection-adjusted traits.
 
-The detailed supplied-code comparison is installed with the package under
-`docs/REFERENCE_COMPARISON.md`.
+See the [complete workflow](inst/docs/WORKFLOW.md) for the step-by-step logic
+and the [reference comparison](inst/docs/REFERENCE_COMPARISON.md) for the
+scientific rationale and severity of each correction.
 
 ## Release archive
 
-`release/fastASSETcli_0.4.3.tar.gz` is the current installable source-package
-archive. Earlier archives remain available for reproducibility. The editable
-package source remains at the repository root; an archive is not a substitute
-for version-controlled source code.
+`release/fastASSETcli_0.4.4.tar.gz` is the current installable source archive.
+Earlier archives remain available for reproducibility.
 
 ## Upstream terms
 

@@ -1,3 +1,15 @@
+# fastASSETcli 0.4.4
+
+- Reorganized the main README into a user-first sequence covering
+  installation, manifest creation, LDSC mode selection, scientific input
+  rules, recommended settings and primary outputs.
+- Added a linked complete workflow guide with a full pipeline flowchart,
+  fifteen processing steps, all decision routes, QC statuses, resume behavior
+  and output-directory structure.
+- Added clearer copy-ready commands for existing-LDSC and automatic-LDSC
+  modes and consolidated the quantitative, binary, tabular and VCF sample-size
+  rules into comparison tables.
+
 # fastASSETcli 0.4.3
 
 - Changed incompatible cross-trait allele handling from a fatal error to an

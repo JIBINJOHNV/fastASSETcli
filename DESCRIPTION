@@ -1,7 +1,7 @@
 Package: fastASSETcli
 Type: Package
 Title: Reference-Aligned FastASSET Command-Line Pipeline
-Version: 0.4.3
+Version: 0.4.4
 Authors@R: person("Jibin", "John", role = c("aut", "cre"),
     email = "69025183+JIBINJOHNV@users.noreply.github.com")
 Description: Runs a reference-aligned fastASSET workflow for large collections
