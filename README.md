@@ -1,9 +1,10 @@
 # Installable fastASSET CLI package
 
 This repository installs the reviewed pipeline as the R package `fastASSETcli` and
-provides the shell command `fastasset`. Version 0.2.0 can either load an
-existing GenomicSEM LDSC object or generate the object automatically before
-running FastASSET. It does not install under the name
+provides the shell command `fastasset`. Version 0.3.0 can either load an
+existing GenomicSEM LDSC object or generate the object automatically from
+tabular or GWAS-VCF summary statistics before running FastASSET. It does not
+install under the name
 `fastASSET`, so it does not overwrite or shadow the upstream project.
 
 ## One-command installation
@@ -74,12 +75,13 @@ When `--ldsc-rdata` is omitted, the CLI runs `GenomicSEM::munge()`, runs
 continues with the same audited FastASSET workflow.
 
 Create a tab- or comma-delimited manifest with exactly one row for every
-`<trait>.Beta` column in the FastASSET input:
+`<trait>.Beta` column in the FastASSET input. Each `FILE` may be an ordinary
+summary-statistic table or a `.vcf`, `.vcf.gz`, `.vcf.bgz`, or `.bcf` file:
 
 ```text
-TRAIT    FILE                              N    SAMPLE_PREV    POPULATION_PREV
-trait_1  /data/trait_1_sumstats.tsv.gz     NA   NA             NA
-trait_2  /data/trait_2_sumstats.tsv.gz     NA   NA             NA
+TRAIT    FILE                              N    SAMPLE    SAMPLE_PREV    POPULATION_PREV
+trait_1  /data/trait_1_sumstats.tsv.gz     NA   NA        NA             NA
+trait_2  /data/trait_2.vcf.gz              NA   NA        NA             NA
 ```
 
 The trait names must match exactly. Manifest rows can be in any order because
@@ -93,6 +95,26 @@ sample-size column. A manifest `N` is a constant per-trait override used only
 by GenomicSEM munging; it does not replace the per-SNP `<trait>.NEF` used by
 FastASSET.
 
+For VCF/BCF inputs, leave manifest `N` as `NA`. A one-sample VCF is selected
+automatically. If a VCF has more than one sample, set `SAMPLE` to the exact VCF
+sample ID. VCF conversion applies these audited rules:
+
+| Input situation | LDSC sample size | Prevalence handling |
+|---|---|---|
+| `POPULATION_PREV` supplied | Per-SNP `N = FORMAT/NC + FORMAT/NCO` | Binary trait; `SAMPLE_PREV` is calculated as `NC/(NC+NCO)` using the unambiguous maximum-total-sample row. Header `TotalCases`/`TotalControls` takes priority when present. |
+| `POPULATION_PREV` is `NA` | Per-SNP `N = FORMAT/NEF` | Quantitative trait; both prevalences remain `NA`. Here `NEF` is used directly as total analyzed sample size. |
+
+The supplied GWAS-VCF convention is handled explicitly: `BETA=FORMAT/ES`,
+`A1=ALT`, `A2=REF`, `MAF=min(FORMAT/AF, 1-FORMAT/AF)`,
+`INFO=FORMAT/SI` when present, and raw `P=10^(-FORMAT/LP)`. Extremely small P values that
+cannot be represented by R are capped at `.Machine$double.xmin`, never changed
+to zero. A VCF declaring `StudyType=CaseControl` without
+`POPULATION_PREV` is rejected.
+
+VCF support applies to per-trait `FILE` entries used to generate LDSC. The
+separate `--fastasset-input` remains the multi-trait wide table containing
+`ID` and `<trait>.Beta/.SE/.NEF` columns.
+
 ```bash
 fastasset \
   --fastasset-input /data/fastasset_wide.tsv.gz \
@@ -103,6 +125,7 @@ fastasset \
   --run-name quantitative_250_traits \
   --ncores 90 \
   --munge-cores 90 \
+  --vcf-cores 90 \
   --chunk-size 1000 \
   --scr-pthr 0.05 \
   --max-traits-per-side 16 \
@@ -119,6 +142,10 @@ through the CLI. For example:
 Use `--wld-ref` only when the LD-score weights are stored separately from
 `--ld-ref`. By default, the same directory is used for both.
 
+`bcftools` must be on `PATH` for VCF inputs. Alternatively provide it through
+the CLI, for example `--bcftools /opt/bcftools/bin/bcftools`. This dependency
+is not required when every manifest `FILE` is already tabular.
+
 Automatic outputs are written under:
 
 ```text
@@ -127,6 +154,7 @@ Automatic outputs are written under:
 ├── ldsc_manifest_resolved.tsv
 ├── ldsc_generation_provenance.tsv
 ├── <run-name>_ldsc.log
+├── vcf_converted/                    # present only for VCF/BCF inputs
 └── munged/
 ```
 
@@ -148,7 +176,7 @@ installed normally:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.2.0.tar.gz
+R CMD INSTALL release/fastASSETcli_0.3.0.tar.gz
 ```
 
 The executable inside an installed package can be located with:
@@ -160,6 +188,9 @@ Rscript -e 'cat(system.file("exec", "fastasset", package="fastASSETcli"))'
 ## Scientific behavior
 
 - Quantitative `.NEF` is used directly as total analyzed sample size.
+- Automatic LDSC accepts tabular or GWAS-VCF manifest files; VCF binary
+  prevalence and sample size are derived from `NC/NCO`, while quantitative VCF
+  `NEF` is used directly.
 - GenomicSEM `$I` is loaded from an existing object or generated and saved as a
   separate `.RData` file.
 - Trait names are recovered from `I`, `S`, or `S_Stand` and reordered to the
@@ -174,8 +205,8 @@ The detailed supplied-code comparison is installed with the package under
 
 ## Release archive
 
-`release/fastASSETcli_0.2.0.tar.gz` is the current installable source-package
-archive. Version 0.1.0 remains available for reproducibility. The editable
+`release/fastASSETcli_0.3.0.tar.gz` is the current installable source-package
+archive. Earlier archives remain available for reproducibility. The editable
 package source remains at the repository root; an archive is not a substitute
 for version-controlled source code.
 

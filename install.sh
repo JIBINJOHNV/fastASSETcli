@@ -44,3 +44,7 @@ fi
 echo "Test the installation with:"
 echo "  fastasset --version"
 echo "  fastasset --help"
+if ! command -v bcftools >/dev/null 2>&1; then
+  echo "NOTE: bcftools is required only when manifest FILE entries are VCF/BCF."
+  echo "      Install bcftools or pass --bcftools /path/to/bcftools."
+fi

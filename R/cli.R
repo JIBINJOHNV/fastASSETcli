@@ -26,8 +26,10 @@ fastasset_cli_help <- function() {
     "                                Trait names are recovered from $S if needed,\n",
     "                                then reordered to .Beta input order.\n\n",
     "Automatic-LDSC mode (used when --ldsc-rdata is omitted):\n",
-    "  --sumstats-manifest FILE     TSV/CSV: TRAIT, FILE, optional N,\n",
-    "                                SAMPLE_PREV and POPULATION_PREV\n",
+    "  --sumstats-manifest FILE     TSV/CSV manifest: TRAIT and FILE plus\n",
+    "                                optional N, SAMPLE, SAMPLE_PREV and\n",
+    "                                POPULATION_PREV. FILE may be a summary\n",
+    "                                table or GWAS-VCF/BCF.\n",
     "                                (NAME/SPREV/PPREV aliases accepted)\n",
     "  --hm3 FILE                   Uncompressed HapMap3 SNP reference\n",
     "  --ld-ref DIRECTORY           GenomicSEM LD-score reference directory\n",
@@ -35,6 +37,9 @@ fastasset_cli_help <- function() {
     "  --munge-info-filter NUMBER   GenomicSEM munge INFO threshold [0.9]\n",
     "  --munge-maf-filter NUMBER    GenomicSEM munge MAF threshold [0.01]\n",
     "  --munge-cores INT            Parallel munging workers [--ncores]\n",
+    "  --bcftools COMMAND           bcftools executable for VCF inputs\n",
+    "                                [bcftools]\n",
+    "  --vcf-cores INT              Parallel VCF conversions [--munge-cores]\n",
     "  --munge-column-map MAP       Comma-separated mapping, e.g.\n",
     "                                SNP=ID,A1=EA,A2=NEA,effect=BETA,N=NEF\n",
     "  --ldsc-chr INT               Chromosomes 1..INT [22]\n",
@@ -42,6 +47,10 @@ fastasset_cli_help <- function() {
     "  --ldsc-chisq-max AUTO|NUMBER Maximum SNP chi-square [AUTO]\n",
     "  Generated .RData, resolved manifest, logs and provenance are saved\n",
     "  in a separate run-specific LDSC directory under --output-dir.\n\n",
+    "VCF rules:\n",
+    "  ES is the ALT-allele effect (A1=ALT, A2=REF); P=10^(-LP).\n",
+    "  With POPULATION_PREV, NC/NCO define binary N and SAMPLE_PREV.\n",
+    "  Without POPULATION_PREV, quantitative N is FORMAT/NEF directly.\n\n",
     "Scientific options:\n",
     "  --scr-pthr NUMBER            Pre-screening P threshold [0.05]\n",
     "  --max-traits-per-side INT    Screened-trait guard per direction [16]\n",
@@ -68,7 +77,7 @@ fastasset_cli_help <- function() {
     "    --sumstats-manifest /data/ldsc_manifest.tsv \\\n",
     "    --hm3 /refs/w_hm3.snplist --ld-ref /refs/eur_w_ld_chr \\\n",
     "    --output-dir /results/fastasset --run-name traits250 \\\n",
-    "    --ncores 90 --munge-cores 90 --include-meta TRUE\n"
+    "    --ncores 90 --munge-cores 90 --vcf-cores 90 --include-meta TRUE\n"
   )
 }
 
@@ -182,7 +191,8 @@ parse_fastasset_cli <- function(arguments) {
     "fastasset-input", "ldsc-rdata", "ldsc-object-name", "output-dir",
     "sumstats-manifest", "hm3", "ld-ref", "wld-ref",
     "munge-info-filter", "munge-maf-filter", "munge-cores",
-    "munge-column-map", "ldsc-chr", "ldsc-blocks", "ldsc-chisq-max",
+    "munge-column-map", "bcftools", "vcf-cores",
+    "ldsc-chr", "ldsc-blocks", "ldsc-chisq-max",
     "run-name", "scr-pthr", "max-traits-per-side",
     "min-available-traits", "cor-thr", "meth-pval", "include-meta",
     "eigen-tolerance", "ncores", "chunk-size", "fail-on-critical",
@@ -221,8 +231,8 @@ parse_fastasset_cli <- function(arguments) {
   )
   automatic_options <- c(
     automatic_required, "wld-ref", "munge-info-filter", "munge-maf-filter",
-    "munge-cores", "munge-column-map", "ldsc-chr", "ldsc-blocks",
-    "ldsc-chisq-max"
+    "munge-cores", "munge-column-map", "bcftools", "vcf-cores",
+    "ldsc-chr", "ldsc-blocks", "ldsc-chisq-max"
   )
   any_automatic_option <- any(names(raw) %in% automatic_options)
 
@@ -248,6 +258,9 @@ parse_fastasset_cli <- function(arguments) {
   }
 
   parsed_ncores <- parse_integer(get_value("ncores", "90"), "--ncores")
+  parsed_munge_cores <- parse_integer(
+    get_value("munge-cores", as.character(parsed_ncores)), "--munge-cores"
+  )
   params <- list(
     fastasset_input = raw[["fastasset-input"]],
     ldsc_rdata = raw[["ldsc-rdata"]],
@@ -263,11 +276,13 @@ parse_fastasset_cli <- function(arguments) {
     munge_maf_filter = parse_number(
       get_value("munge-maf-filter", "0.01"), "--munge-maf-filter"
     ),
-    munge_cores = parse_integer(
-      get_value("munge-cores", as.character(parsed_ncores)), "--munge-cores"
-    ),
+    munge_cores = parsed_munge_cores,
     munge_column_map = parse_munge_column_map(
       get_value("munge-column-map", "AUTO")
+    ),
+    bcftools = get_value("bcftools", "bcftools"),
+    vcf_cores = parse_integer(
+      get_value("vcf-cores", as.character(parsed_munge_cores)), "--vcf-cores"
     ),
     ldsc_chr = parse_integer(get_value("ldsc-chr", "22"), "--ldsc-chr"),
     ldsc_blocks = parse_integer(
@@ -428,6 +443,12 @@ validate_cli_params <- function(params) {
   }
   if (params$munge_cores < 1L) {
     stop("--munge-cores must be at least 1.", call. = FALSE)
+  }
+  if (!nzchar(trimws(params$bcftools))) {
+    stop("--bcftools cannot be empty.", call. = FALSE)
+  }
+  if (params$vcf_cores < 1L) {
+    stop("--vcf-cores must be at least 1.", call. = FALSE)
   }
   if (params$ldsc_chr < 1L || params$ldsc_chr > 100L) {
     stop("--ldsc-chr must be between 1 and 100.", call. = FALSE)

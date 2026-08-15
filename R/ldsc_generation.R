@@ -64,6 +64,18 @@ resolve_manifest_paths <- function(paths, manifest_path) {
   vapply(paths, normalizePath, character(1L), mustWork = TRUE)
 }
 
+is_vcf_summary_path <- function(path) {
+  grepl("\\.(vcf|vcf\\.gz|vcf\\.bgz|bcf)$", tolower(path))
+}
+
+coerce_manifest_text <- function(values) {
+  text <- trimws(as.character(values))
+  missing <- is.na(values) | !nzchar(text) |
+    toupper(text) %in% c("NA", "N/A", "NULL", ".")
+  text[missing] <- NA_character_
+  text
+}
+
 read_ldsc_manifest <- function(path, analysis_traits) {
   analysis_traits <- as.character(analysis_traits)
   manifest <- data.table::fread(
@@ -94,6 +106,9 @@ read_ldsc_manifest <- function(path, analysis_traits) {
     headers,
     c("POPULATION_PREV", "PPREV", "POPULATION_PREVALENCE"),
     "POPULATION_PREV"
+  )
+  sample_column <- find_manifest_column(
+    headers, c("SAMPLE", "VCF_SAMPLE", "SAMPLE_ID"), "SAMPLE"
   )
 
   traits <- trimws(as.character(manifest[[trait_column]]))
@@ -133,6 +148,15 @@ read_ldsc_manifest <- function(path, analysis_traits) {
   if (anyDuplicated(input_files)) {
     stop("Each LDSC manifest trait must use a distinct summary-statistic file.")
   }
+  source_format <- ifelse(is_vcf_summary_path(input_files), "VCF", "TABLE")
+  vcf_sample <- if (is.na(sample_column)) {
+    rep(NA_character_, nrow(manifest))
+  } else {
+    coerce_manifest_text(manifest[[sample_column]])
+  }
+  if (any(source_format != "VCF" & !is.na(vcf_sample))) {
+    stop("Manifest SAMPLE values are only valid for VCF/BCF input files.")
+  }
 
   sample_size <- if (is.na(n_column)) {
     rep(NA_real_, nrow(manifest))
@@ -141,6 +165,12 @@ read_ldsc_manifest <- function(path, analysis_traits) {
   }
   if (any(!is.na(sample_size) & sample_size <= 0)) {
     stop("Every non-missing LDSC manifest N value must be greater than zero.")
+  }
+  if (any(source_format == "VCF" & !is.na(sample_size))) {
+    stop(
+      "Do not provide manifest N for VCF inputs. Binary VCF N is derived as ",
+      "NC + NCO; quantitative VCF N is taken directly from NEF."
+    )
   }
 
   sample_prev <- if (is.na(sample_prev_column)) {
@@ -155,12 +185,23 @@ read_ldsc_manifest <- function(path, analysis_traits) {
       manifest[[population_prev_column]], "POPULATION_PREV"
     )
   }
-  unmatched_prevalence <- xor(is.na(sample_prev), is.na(population_prev))
+  unmatched_prevalence <- source_format != "VCF" &
+    xor(is.na(sample_prev), is.na(population_prev))
   if (any(unmatched_prevalence)) {
     stop(
       "SAMPLE_PREV and POPULATION_PREV must both be NA for quantitative ",
       "traits or both be provided for binary traits. Invalid manifest row(s): ",
       paste(which(unmatched_prevalence) + 1L, collapse = ", "), "."
+    )
+  }
+  vcf_sample_without_population <- source_format == "VCF" &
+    !is.na(sample_prev) & is.na(population_prev)
+  if (any(vcf_sample_without_population)) {
+    stop(
+      "A VCF SAMPLE_PREV cannot be supplied without POPULATION_PREV. ",
+      "For quantitative VCFs both prevalences must be NA. Invalid manifest ",
+      "row(s): ",
+      paste(which(vcf_sample_without_population) + 1L, collapse = ", "), "."
     )
   }
   invalid_prevalence <-
@@ -173,10 +214,18 @@ read_ldsc_manifest <- function(path, analysis_traits) {
 
   resolved <- data.table::data.table(
     trait = traits,
+    source_file = input_files,
     file = input_files,
+    source_format = source_format,
+    vcf_sample = vcf_sample,
     N = sample_size,
     sample_prev = sample_prev,
-    population_prev = population_prev
+    population_prev = population_prev,
+    sample_prev_source = ifelse(
+      is.na(sample_prev), NA_character_, "manifest"
+    ),
+    vcf_study_type = NA_character_,
+    vcf_has_info = NA
   )
   resolved[["order"]] <- match(resolved[["trait"]], analysis_traits)
   if (anyNA(resolved[["order"]])) {
@@ -185,9 +234,610 @@ read_ldsc_manifest <- function(path, analysis_traits) {
   data.table::setorder(resolved, order)
   data.table::setcolorder(
     resolved,
-    c("order", "trait", "file", "N", "sample_prev", "population_prev")
+    c(
+      "order", "trait", "source_file", "file", "source_format",
+      "vcf_sample", "N", "sample_prev", "population_prev",
+      "sample_prev_source", "vcf_study_type", "vcf_has_info"
+    )
   )
   resolved
+}
+
+resolve_bcftools_executable <- function(value) {
+  requested <- path.expand(trimws(as.character(value)))
+  if (length(requested) != 1L || !nzchar(requested)) {
+    stop("--bcftools cannot be empty.")
+  }
+  resolved <- if (grepl("[/\\\\]", requested)) {
+    requested
+  } else {
+    unname(Sys.which(requested))
+  }
+  if (!nzchar(resolved) || !file.exists(resolved)) {
+    stop(
+      "VCF input requires bcftools. Install bcftools or provide its executable ",
+      "with --bcftools PATH. Requested value: ", requested
+    )
+  }
+  if (file.access(resolved, 1L) != 0L) {
+    stop("The bcftools executable is not executable: ", resolved)
+  }
+  normalizePath(resolved, mustWork = TRUE)
+}
+
+bcftools_failure_message <- function(label, status, stderr_file) {
+  details <- if (file.exists(stderr_file)) {
+    tail(readLines(stderr_file, warn = FALSE), 20L)
+  } else {
+    character()
+  }
+  paste0(
+    label, " failed with exit status ", status, ".",
+    if (length(details) > 0L) {
+      paste0("\n  ", paste(details, collapse = "\n  "))
+    } else {
+      ""
+    }
+  )
+}
+
+run_bcftools_to_file <- function(executable, arguments, output, label) {
+  stderr_file <- paste0(output, ".stderr")
+  on.exit(unlink(stderr_file, force = TRUE), add = TRUE)
+  status <- suppressWarnings(system2(
+    executable,
+    arguments,
+    stdout = output,
+    stderr = stderr_file,
+    wait = TRUE
+  ))
+  if (length(status) == 0L || is.null(status)) status <- 0L
+  if (!identical(as.integer(status), 0L)) {
+    stop(bcftools_failure_message(label, status, stderr_file))
+  }
+  invisible(output)
+}
+
+run_bcftools_lines <- function(executable, arguments, label) {
+  output <- tempfile("fastasset_bcftools_")
+  on.exit(unlink(output, force = TRUE), add = TRUE)
+  run_bcftools_to_file(executable, arguments, output, label)
+  readLines(output, warn = FALSE)
+}
+
+extract_vcf_meta_value <- function(line, key) {
+  pattern <- paste0("(^|[,<])", key, "=([^,>]+)")
+  matched <- regexec(pattern, line, perl = TRUE)
+  values <- regmatches(line, matched)[[1L]]
+  if (length(values) < 3L) return(NA_character_)
+  sub('^"|"$', "", trimws(values[3L]))
+}
+
+vcf_sample_metadata <- function(header, sample) {
+  lines <- grep("^##SAMPLE=<", header, value = TRUE)
+  if (length(lines) == 0L) return(character())
+  ids <- vapply(
+    lines, extract_vcf_meta_value, character(1L), key = "ID"
+  )
+  matching <- lines[!is.na(ids) & ids == sample]
+  if (length(matching) == 0L) return(character())
+  if (length(matching) > 1L) {
+    stop("The VCF has duplicate ##SAMPLE metadata for sample: ", sample)
+  }
+  matching
+}
+
+parse_optional_positive_number <- function(value, label, file) {
+  if (length(value) == 0L || is.na(value) || !nzchar(value)) return(NA_real_)
+  parsed <- suppressWarnings(as.numeric(value))
+  if (!is.finite(parsed) || parsed <= 0) {
+    stop("Invalid ", label, " in VCF ##SAMPLE metadata: ", file)
+  }
+  parsed
+}
+
+coerce_vcf_numeric_columns <- function(table, columns, file) {
+  for (column in columns) {
+    original <- table[[column]]
+    parsed <- suppressWarnings(as.numeric(original))
+    nonmissing <- !is.na(original) & nzchar(trimws(as.character(original))) &
+      trimws(as.character(original)) != "."
+    malformed <- nonmissing & !is.finite(parsed)
+    if (any(malformed)) {
+      stop(
+        "VCF FORMAT/", column, " contains malformed numeric value(s) in ",
+        file, "."
+      )
+    }
+    table[[column]] <- parsed
+  }
+  table
+}
+
+derive_binary_sample_prevalence <- function(table, supplied_sample_prev,
+                                             header_cases, header_controls,
+                                             file) {
+  if (is.finite(header_cases) && is.finite(header_controls)) {
+    cases <- header_cases
+    controls <- header_controls
+    source <- "VCF ##SAMPLE TotalCases/TotalControls"
+  } else {
+    total <- table[["NC"]] + table[["NCO"]]
+    maximum <- max(total)
+    maximum_rows <- total == maximum
+    pairs <- unique(table[maximum_rows, c("NC", "NCO"), with = FALSE])
+    if (nrow(pairs) != 1L) {
+      stop(
+        "Cannot derive one unambiguous SAMPLE_PREV from VCF NC/NCO at the ",
+        "maximum total sample size in ", file, "."
+      )
+    }
+    cases <- pairs[["NC"]][1L]
+    controls <- pairs[["NCO"]][1L]
+    source <- "FORMAT/NC and FORMAT/NCO at maximum NC+NCO"
+  }
+  derived <- cases / (cases + controls)
+  tolerance <- max(1e-6, 0.5 / (cases + controls))
+  if (!is.na(supplied_sample_prev) &&
+      abs(supplied_sample_prev - derived) > tolerance) {
+    stop(
+      "Manifest SAMPLE_PREV does not match the value derived from VCF NC/NCO ",
+      "for ", file, ": supplied=", format(supplied_sample_prev, digits = 12),
+      ", derived=", format(derived, digits = 12), "."
+    )
+  }
+  list(
+    sample_prev = derived,
+    cases = cases,
+    controls = controls,
+    source = source
+  )
+}
+
+standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
+                                        header_cases = NA_real_,
+                                        header_controls = NA_real_,
+                                        has_info = FALSE,
+                                        source_file = "VCF") {
+  numeric_columns <- c("POS", "ES", "SE", "LP", "AF")
+  if ("NEF" %in% names(table)) numeric_columns <- c(numeric_columns, "NEF")
+  if ("SS" %in% names(table)) numeric_columns <- c(numeric_columns, "SS")
+  if (binary) numeric_columns <- c(numeric_columns, "NC", "NCO")
+  if (has_info) numeric_columns <- c(numeric_columns, "SI")
+  table <- coerce_vcf_numeric_columns(
+    table, unique(numeric_columns), source_file
+  )
+
+  table[["SNP"]] <- trimws(as.character(table[["SNP"]]))
+  table[["REF"]] <- toupper(trimws(as.character(table[["REF"]])))
+  table[["ALT"]] <- toupper(trimws(as.character(table[["ALT"]])))
+  valid <- !is.na(table[["SNP"]]) & nzchar(table[["SNP"]]) &
+    table[["SNP"]] != "." &
+    grepl("^[ACGT]$", table[["REF"]]) &
+    grepl("^[ACGT]$", table[["ALT"]]) &
+    table[["REF"]] != table[["ALT"]] &
+    is.finite(table[["ES"]]) &
+    is.finite(table[["SE"]]) & table[["SE"]] > 0 &
+    is.finite(table[["LP"]]) & table[["LP"]] >= 0 &
+    is.finite(table[["AF"]]) & table[["AF"]] > 0 & table[["AF"]] < 1
+  if (binary) {
+    valid <- valid & is.finite(table[["NC"]]) & table[["NC"]] > 0 &
+      is.finite(table[["NCO"]]) & table[["NCO"]] > 0
+  } else {
+    valid <- valid & is.finite(table[["NEF"]]) & table[["NEF"]] > 0
+  }
+  if (has_info) {
+    valid <- valid & is.finite(table[["SI"]]) &
+      table[["SI"]] >= 0 & table[["SI"]] <= 1
+  }
+
+  input_rows <- nrow(table)
+  table <- table[valid]
+  if (nrow(table) == 0L) {
+    stop("No valid biallelic SNP rows remained after VCF conversion: ", source_file)
+  }
+  if (anyDuplicated(table[["SNP"]])) {
+    duplicates <- unique(table[["SNP"]][duplicated(table[["SNP"]])])
+    stop(
+      "VCF contains duplicate SNP identifiers after filtering: ",
+      paste(head(duplicates, 10L), collapse = ", "),
+      if (length(duplicates) > 10L) " ..." else "",
+      ". Normalize/de-duplicate the VCF before analysis: ", source_file
+    )
+  }
+
+  minimum_log10 <- -log10(.Machine$double.xmin)
+  p_was_capped <- table[["LP"]] > minimum_log10
+  raw_p <- 10^(-pmin(table[["LP"]], minimum_log10))
+
+  prevalence <- if (binary) {
+    derive_binary_sample_prevalence(
+      table, supplied_sample_prev, header_cases, header_controls, source_file
+    )
+  } else {
+    list(
+      sample_prev = NA_real_, cases = NA_real_, controls = NA_real_,
+      source = "not applicable (quantitative)"
+    )
+  }
+  per_snp_n <- if (binary) {
+    table[["NC"]] + table[["NCO"]]
+  } else {
+    table[["NEF"]]
+  }
+  if (binary && "SS" %in% names(table)) {
+    comparable <- is.finite(table[["SS"]])
+    inconsistent <- comparable & abs(table[["SS"]] - per_snp_n) > 0.5
+    if (any(inconsistent)) {
+      stop(
+        "VCF FORMAT/SS is inconsistent with FORMAT/NC + FORMAT/NCO for ",
+        sum(inconsistent), " converted row(s): ", source_file
+      )
+    }
+  }
+
+  output <- data.table::data.table(
+    SNP = table[["SNP"]],
+    A1 = table[["ALT"]],
+    A2 = table[["REF"]],
+    BETA = table[["ES"]],
+    SE = table[["SE"]],
+    P = raw_p,
+    N = per_snp_n,
+    MAF = pmin(table[["AF"]], 1 - table[["AF"]])
+  )
+  if (has_info) output[["INFO"]] <- table[["SI"]]
+  output[["CHR"]] <- as.character(table[["CHR"]])
+  output[["POS"]] <- table[["POS"]]
+  output[["LP"]] <- table[["LP"]]
+  output[["AF"]] <- table[["AF"]]
+  if ("SS" %in% names(table)) output[["SS"]] <- table[["SS"]]
+  if (binary) {
+    output[["NC"]] <- table[["NC"]]
+    output[["NCO"]] <- table[["NCO"]]
+  }
+  if ("NEF" %in% names(table)) output[["NEF"]] <- table[["NEF"]]
+
+  list(
+    table = output,
+    sample_prev = prevalence$sample_prev,
+    sample_prev_source = prevalence$source,
+    cases = prevalence$cases,
+    controls = prevalence$controls,
+    input_rows = input_rows,
+    output_rows = nrow(output),
+    dropped_rows = input_rows - nrow(output),
+    p_values_capped = sum(p_was_capped)
+  )
+}
+
+write_generated_table <- function(table, path) {
+  temporary <- paste0(path, ".building-", Sys.getpid(), ".gz")
+  on.exit(unlink(temporary, force = TRUE), add = TRUE)
+  data.table::fwrite(
+    table, temporary, sep = "\t", quote = FALSE, na = "NA",
+    compress = "gzip"
+  )
+  if (!file.rename(temporary, path)) {
+    stop("Could not move generated VCF-conversion table into place: ", path)
+  }
+  invisible(path)
+}
+
+write_conversion_metadata <- function(values, path) {
+  metadata <- data.table::data.table(
+    parameter = names(values),
+    value = vapply(values, as.character, character(1L))
+  )
+  temporary <- paste0(path, ".building-", Sys.getpid())
+  on.exit(unlink(temporary, force = TRUE), add = TRUE)
+  data.table::fwrite(metadata, temporary, sep = "\t", quote = FALSE)
+  if (!file.rename(temporary, path)) {
+    stop("Could not move VCF-conversion metadata into place: ", path)
+  }
+  invisible(path)
+}
+
+read_conversion_metadata <- function(path) {
+  metadata <- data.table::fread(path, colClasses = "character")
+  if (!all(c("parameter", "value") %in% names(metadata)) ||
+      anyDuplicated(metadata[["parameter"]])) {
+    stop("Malformed VCF-conversion metadata: ", path)
+  }
+  stats::setNames(as.list(metadata[["value"]]), metadata[["parameter"]])
+}
+
+prepare_one_vcf_summary <- function(source_file, requested_sample,
+                                    population_prev, supplied_sample_prev,
+                                    output_file, metadata_file, bcftools,
+                                    bcftools_version) {
+  required_metadata <- c(
+    "sample", "study_type", "sample_prev", "sample_prev_source", "has_info"
+  )
+  if (file.exists(output_file) && file.exists(metadata_file)) {
+    metadata <- read_conversion_metadata(metadata_file)
+    if (all(required_metadata %in% names(metadata))) {
+      return(list(
+        file = normalizePath(output_file, mustWork = TRUE),
+        sample = metadata[["sample"]],
+        study_type = metadata[["study_type"]],
+        sample_prev = suppressWarnings(as.numeric(metadata[["sample_prev"]])),
+        sample_prev_source = metadata[["sample_prev_source"]],
+        has_info = identical(metadata[["has_info"]], "TRUE")
+      ))
+    }
+  }
+
+  header <- run_bcftools_lines(
+    bcftools,
+    c("view", "--header-only", shQuote(source_file)),
+    paste0("bcftools header inspection for ", source_file)
+  )
+  samples <- run_bcftools_lines(
+    bcftools,
+    c("query", "--list-samples", shQuote(source_file)),
+    paste0("bcftools sample inspection for ", source_file)
+  )
+  samples <- samples[nzchar(samples)]
+  if (length(samples) == 0L) {
+    stop("VCF has no sample column: ", source_file)
+  }
+  sample <- requested_sample
+  if (is.na(sample)) {
+    if (length(samples) != 1L) {
+      stop(
+        "VCF contains multiple samples; provide the manifest SAMPLE value for ",
+        source_file, ". Available samples: ", paste(samples, collapse = ", ")
+      )
+    }
+    sample <- samples[1L]
+  } else if (!sample %in% samples) {
+    stop(
+      "Manifest SAMPLE is not present in VCF ", source_file, ": ", sample,
+      ". Available samples: ", paste(samples, collapse = ", ")
+    )
+  }
+
+  sample_metadata <- vcf_sample_metadata(header, sample)
+  study_type <- if (length(sample_metadata) == 1L) {
+    extract_vcf_meta_value(sample_metadata, "StudyType")
+  } else {
+    NA_character_
+  }
+  normalized_study_type <- toupper(gsub("[^A-Za-z]", "", study_type))
+  header_binary <- normalized_study_type %in% c("CASECONTROL", "BINARY")
+  header_quantitative <- normalized_study_type %in%
+    c("CONTINUOUS", "QUANTITATIVE")
+  binary <- !is.na(population_prev)
+  if (header_binary && !binary) {
+    stop(
+      "VCF ##SAMPLE StudyType is CaseControl, but POPULATION_PREV is missing ",
+      "from the manifest: ", source_file
+    )
+  }
+  if (header_quantitative && binary) {
+    stop(
+      "VCF ##SAMPLE StudyType is Continuous, but POPULATION_PREV was supplied: ",
+      source_file
+    )
+  }
+  if (is.na(study_type)) {
+    study_type <- if (binary) "CaseControl (inferred)" else "Continuous (inferred)"
+  }
+
+  format_lines <- grep("^##FORMAT=<ID=", header, value = TRUE)
+  format_ids <- sub("^##FORMAT=<ID=([^,>]+).*$", "\\1", format_lines)
+  required_fields <- c("ES", "SE", "LP", "AF")
+  if (binary) {
+    required_fields <- c(required_fields, "NC", "NCO")
+  } else {
+    required_fields <- c(required_fields, "NEF")
+  }
+  missing_fields <- setdiff(required_fields, format_ids)
+  if (length(missing_fields) > 0L) {
+    stop(
+      "VCF is missing required FORMAT field(s): ",
+      paste(missing_fields, collapse = ", "), ". File: ", source_file
+    )
+  }
+  has_info <- "SI" %in% format_ids
+  optional_fields <- intersect(c("SS", "SI", "NEF"), format_ids)
+  queried_fields <- c(required_fields, optional_fields)
+  queried_fields <- queried_fields[!duplicated(queried_fields)]
+  query_format <- paste0(
+    paste(c("%CHROM", "%POS", "%ID", "%REF", "%ALT"), collapse = "\\t"),
+    "[\\t", paste0("%", queried_fields, collapse = "\\t"), "]\\n"
+  )
+  raw_output <- paste0(output_file, ".bcftools-query-", Sys.getpid(), ".tsv")
+  on.exit(unlink(raw_output, force = TRUE), add = TRUE)
+  run_bcftools_to_file(
+    bcftools,
+    c(
+      "query", "--samples", shQuote(sample), "--format",
+      shQuote(query_format), shQuote(source_file)
+    ),
+    raw_output,
+    paste0("bcftools query for ", source_file)
+  )
+  query <- data.table::fread(
+    raw_output,
+    header = FALSE,
+    col.names = c("CHR", "POS", "SNP", "REF", "ALT", queried_fields),
+    na.strings = c(".", "NA", ""),
+    check.names = FALSE
+  )
+
+  header_cases <- if (length(sample_metadata) == 1L) {
+    parse_optional_positive_number(
+      extract_vcf_meta_value(sample_metadata, "TotalCases"),
+      "TotalCases", source_file
+    )
+  } else {
+    NA_real_
+  }
+  header_controls <- if (length(sample_metadata) == 1L) {
+    parse_optional_positive_number(
+      extract_vcf_meta_value(sample_metadata, "TotalControls"),
+      "TotalControls", source_file
+    )
+  } else {
+    NA_real_
+  }
+  if (xor(is.finite(header_cases), is.finite(header_controls))) {
+    stop(
+      "VCF ##SAMPLE metadata must provide both TotalCases and TotalControls ",
+      "or neither: ", source_file
+    )
+  }
+
+  standardized <- standardize_vcf_query_table(
+    query,
+    binary = binary,
+    supplied_sample_prev = supplied_sample_prev,
+    header_cases = header_cases,
+    header_controls = header_controls,
+    has_info = has_info,
+    source_file = source_file
+  )
+  write_generated_table(standardized$table, output_file)
+  write_conversion_metadata(
+    list(
+      source_file = source_file,
+      converted_file = output_file,
+      sample = sample,
+      study_type = study_type,
+      trait_type = if (binary) "binary" else "quantitative",
+      population_prev = if (binary) population_prev else NA_real_,
+      sample_prev = standardized$sample_prev,
+      sample_prev_source = standardized$sample_prev_source,
+      maximum_cases = standardized$cases,
+      maximum_controls = standardized$controls,
+      has_info = has_info,
+      input_rows = standardized$input_rows,
+      output_rows = standardized$output_rows,
+      dropped_rows = standardized$dropped_rows,
+      p_values_capped = standardized$p_values_capped,
+      p_conversion = "P=10^(-LP); values below .Machine$double.xmin capped",
+      effect_allele = "A1=ALT; BETA=FORMAT/ES",
+      other_allele = "A2=REF",
+      ldsc_n = if (binary) "FORMAT/NC + FORMAT/NCO" else "FORMAT/NEF",
+      bcftools = bcftools,
+      bcftools_version = bcftools_version
+    ),
+    metadata_file
+  )
+  list(
+    file = normalizePath(output_file, mustWork = TRUE),
+    sample = sample,
+    study_type = study_type,
+    sample_prev = standardized$sample_prev,
+    sample_prev_source = standardized$sample_prev_source,
+    has_info = has_info
+  )
+}
+
+prepare_manifest_vcf_files <- function(params, manifest, generation_dir) {
+  rows <- which(manifest[["source_format"]] == "VCF")
+  if (length(rows) == 0L) {
+    return(list(
+      manifest = manifest,
+      bcftools = NA_character_,
+      bcftools_version = NA_character_
+    ))
+  }
+  bcftools <- resolve_bcftools_executable(params$bcftools)
+  version_lines <- run_bcftools_lines(
+    bcftools, "--version", "bcftools version check"
+  )
+  bcftools_version <- if (length(version_lines) > 0L) {
+    version_lines[1L]
+  } else {
+    "unknown"
+  }
+  conversion_dir <- file.path(generation_dir, "vcf_converted")
+  dir.create(conversion_dir, recursive = TRUE, showWarnings = FALSE)
+  output_files <- file.path(
+    conversion_dir, sprintf("trait_%04d.tsv.gz", manifest[["order"]][rows])
+  )
+  metadata_files <- file.path(
+    conversion_dir, sprintf("trait_%04d.metadata.tsv", manifest[["order"]][rows])
+  )
+  worker <- function(task) {
+    row <- rows[task]
+    tryCatch(
+      list(
+        ok = TRUE,
+        result = prepare_one_vcf_summary(
+          source_file = manifest[["source_file"]][row],
+          requested_sample = manifest[["vcf_sample"]][row],
+          population_prev = manifest[["population_prev"]][row],
+          supplied_sample_prev = manifest[["sample_prev"]][row],
+          output_file = output_files[task],
+          metadata_file = metadata_files[task],
+          bcftools = bcftools,
+          bcftools_version = bcftools_version
+        )
+      ),
+      error = function(error) list(ok = FALSE, error = conditionMessage(error))
+    )
+  }
+  workers <- min(params$vcf_cores, length(rows))
+  message(
+    "Converting ", length(rows), " VCF summary-statistic file(s) with ",
+    workers, " bcftools worker(s)."
+  )
+  results <- if (.Platform$OS.type == "windows" || workers == 1L) {
+    lapply(seq_along(rows), worker)
+  } else {
+    parallel::mclapply(
+      seq_along(rows), worker, mc.cores = workers, mc.preschedule = FALSE
+    )
+  }
+  failed <- which(!vapply(
+    results,
+    function(value) is.list(value) && isTRUE(value$ok),
+    logical(1L)
+  ))
+  if (length(failed) > 0L) {
+    messages <- vapply(
+      failed,
+      function(index) {
+        detail <- if (is.list(results[[index]]) &&
+                      !is.null(results[[index]]$error)) {
+          results[[index]]$error
+        } else {
+          "worker terminated without returning an error message"
+        }
+        paste0(manifest[["trait"]][rows[index]], ": ", detail)
+      },
+      character(1L)
+    )
+    stop("VCF conversion failed:\n  ", paste(messages, collapse = "\n  "))
+  }
+  for (task in seq_along(rows)) {
+    row <- rows[task]
+    result <- results[[task]]$result
+    data.table::set(manifest, i = row, j = "file", value = result$file)
+    data.table::set(manifest, i = row, j = "vcf_sample", value = result$sample)
+    data.table::set(
+      manifest, i = row, j = "vcf_study_type", value = result$study_type
+    )
+    data.table::set(
+      manifest, i = row, j = "sample_prev", value = result$sample_prev
+    )
+    data.table::set(
+      manifest, i = row, j = "sample_prev_source",
+      value = result$sample_prev_source
+    )
+    data.table::set(
+      manifest, i = row, j = "vcf_has_info", value = result$has_info
+    )
+  }
+  list(
+    manifest = manifest,
+    bcftools = bcftools,
+    bcftools_version = bcftools_version
+  )
 }
 
 ld_reference_paths <- function(directory, chromosomes, include_m = FALSE) {
@@ -253,8 +903,10 @@ make_ldsc_generation_signature <- function(params, manifest, reference_files) {
     )
   }
   values <- c(
-    "ldsc_generation_version=2026-08-15-v1",
+    "ldsc_generation_version=2026-08-15-v2-vcf",
     paste0("traits=", paste(manifest$trait, collapse = ";")),
+    paste0("source_format=", paste(manifest$source_format, collapse = ";")),
+    paste0("vcf_sample=", paste(manifest$vcf_sample, collapse = ";")),
     paste0("N=", paste(manifest$N, collapse = ";")),
     paste0("sample_prev=", paste(manifest$sample_prev, collapse = ";")),
     paste0(
@@ -269,9 +921,11 @@ make_ldsc_generation_signature <- function(params, manifest, reference_files) {
     paste0("chr=", params$ldsc_chr),
     paste0("blocks=", params$ldsc_blocks),
     paste0("chisq_max=", params$ldsc_chisq_max),
+    paste0("bcftools=", params$bcftools),
+    paste0("vcf_cores=", params$vcf_cores),
     file_metadata_lines("manifest", params$sumstats_manifest),
     file_metadata_lines("hm3", params$hm3),
-    file_metadata_lines("summary", manifest$file),
+    file_metadata_lines("summary", manifest$source_file),
     file_metadata_lines("reference", reference_files)
   )
   make_text_signature(values)
@@ -349,21 +1003,6 @@ generate_ldsc_object <- function(params, analysis_traits) {
   munge_dir <- file.path(generation_dir, "munged")
   dir.create(munge_dir, recursive = TRUE, showWarnings = FALSE)
 
-  manifest[, munged_prefix := file.path(
-    munge_dir, sprintf("trait_%04d", order)
-  )]
-  manifest[, munged_file := paste0(munged_prefix, ".sumstats.gz")]
-  resolved_manifest_file <- file.path(
-    generation_dir, "ldsc_manifest_resolved.tsv"
-  )
-  data.table::fwrite(
-    manifest,
-    resolved_manifest_file,
-    sep = "\t",
-    quote = FALSE,
-    na = "NA"
-  )
-
   rdata <- file.path(
     generation_dir,
     paste0(params$run_name, "_LDSCoutput.RData")
@@ -381,13 +1020,34 @@ generate_ldsc_object <- function(params, analysis_traits) {
     ))
   }
 
+  vcf_preparation <- prepare_manifest_vcf_files(
+    params, manifest, generation_dir
+  )
+  manifest <- vcf_preparation$manifest
+
+  manifest[, munged_prefix := file.path(
+    munge_dir, sprintf("trait_%04d", order)
+  )]
+  manifest[, munged_file := paste0(munged_prefix, ".sumstats.gz")]
+  resolved_manifest_file <- file.path(
+    generation_dir, "ldsc_manifest_resolved.tsv"
+  )
+  data.table::fwrite(
+    manifest,
+    resolved_manifest_file,
+    sep = "\t",
+    quote = FALSE,
+    na = "NA"
+  )
+
   needs_munge <- !file.exists(manifest$munged_file)
-  if (any(needs_munge)) {
-    rows <- which(needs_munge)
+  run_munge_group <- function(rows, column_map, label) {
+    rows <- rows[needs_munge[rows]]
+    if (length(rows) == 0L) return(invisible(NULL))
+    workers <- min(params$munge_cores, length(rows))
     message(
-      "Munging ", length(rows), " of ", nrow(manifest),
-      " summary-statistic files with ",
-      min(params$munge_cores, length(rows)), " worker(s)."
+      "Munging ", length(rows), " ", label,
+      " summary-statistic file(s) with ", workers, " worker(s)."
     )
     GenomicSEM::munge(
       files = manifest$file[rows],
@@ -396,12 +1056,33 @@ generate_ldsc_object <- function(params, analysis_traits) {
       N = manifest$N[rows],
       info.filter = params$munge_info_filter,
       maf.filter = params$munge_maf_filter,
-      log.name = file.path(generation_dir, paste0(params$run_name, "_munge")),
-      column.names = params$munge_column_map,
+      log.name = file.path(
+        generation_dir, paste0(params$run_name, "_munge_", label)
+      ),
+      column.names = column_map,
       parallel = length(rows) > 1L && params$munge_cores > 1L,
-      cores = min(params$munge_cores, length(rows)),
+      cores = workers,
       overwrite = FALSE
     )
+    invisible(NULL)
+  }
+  if (any(needs_munge)) {
+    table_rows <- which(manifest$source_format == "TABLE")
+    vcf_info_rows <- which(
+      manifest$source_format == "VCF" & manifest$vcf_has_info
+    )
+    vcf_no_info_rows <- which(
+      manifest$source_format == "VCF" & !manifest$vcf_has_info
+    )
+    vcf_map <- list(
+      SNP = "SNP", A1 = "A1", A2 = "A2", effect = "BETA",
+      P = "P", N = "N", MAF = "MAF"
+    )
+    run_munge_group(table_rows, params$munge_column_map, "table")
+    run_munge_group(
+      vcf_info_rows, c(vcf_map, list(INFO = "INFO")), "vcf_info"
+    )
+    run_munge_group(vcf_no_info_rows, vcf_map, "vcf_no_info")
   } else {
     message("All signature-matched munged files exist; skipping munging.")
   }
@@ -454,6 +1135,7 @@ generate_ldsc_object <- function(params, analysis_traits) {
       "generation_signature", "number_traits", "requested_ldsc_blocks",
       "effective_ldsc_blocks", "ldsc_chr", "ld_ref", "wld_ref", "hm3",
       "manifest", "info_filter", "maf_filter", "munge_cores",
+      "bcftools", "bcftools_version", "vcf_cores", "number_vcf_inputs",
       "ldsc_chisq_max", "ldsc_object_name", "generated_rdata"
     ),
     value = as.character(c(
@@ -461,6 +1143,8 @@ generate_ldsc_object <- function(params, analysis_traits) {
       params$ldsc_chr, params$ld_ref, params$wld_ref, params$hm3,
       params$sumstats_manifest, params$munge_info_filter,
       params$munge_maf_filter, params$munge_cores,
+      vcf_preparation$bcftools, vcf_preparation$bcftools_version,
+      params$vcf_cores, sum(manifest$source_format == "VCF"),
       if (is.na(params$ldsc_chisq_max)) "AUTO" else params$ldsc_chisq_max,
       params$ldsc_object_name, rdata
     ))

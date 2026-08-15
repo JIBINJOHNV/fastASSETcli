@@ -1,3 +1,16 @@
+# fastASSETcli 0.3.0
+
+- Added automatic `bcftools` conversion for `.vcf`, `.vcf.gz`, `.vcf.bgz`,
+  and `.bcf` files listed in the LDSC manifest.
+- Added explicit GWAS-VCF mapping: `A1=ALT`, `A2=REF`, `BETA=ES`, `INFO=SI`,
+  `MAF=min(AF,1-AF)`, and `P=10^(-LP)` with positive-double protection.
+- Added binary-trait handling when `POPULATION_PREV` is supplied: per-SNP
+  `N=NC+NCO` and automatic `SAMPLE_PREV=NC/(NC+NCO)` derivation.
+- Added quantitative VCF handling when both prevalences are absent: per-SNP
+  `FORMAT/NEF` is used directly as total sample size.
+- Added VCF header/FORMAT validation, multi-sample selection, resumable
+  conversion outputs, conversion metadata, `--bcftools`, and `--vcf-cores`.
+
 # fastASSETcli 0.2.0
 
 - Made `--ldsc-rdata` optional by adding automatic GenomicSEM munging and LDSC.
