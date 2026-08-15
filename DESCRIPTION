@@ -1,13 +1,15 @@
 Package: fastASSETcli
 Type: Package
 Title: Reference-Aligned FastASSET Command-Line Pipeline
-Version: 0.3.0
+Version: 0.4.0
 Authors@R: person("Jibin", "John", role = c("aut", "cre"),
     email = "69025183+JIBINJOHNV@users.noreply.github.com")
 Description: Runs a reference-aligned fastASSET workflow for large collections
-    of quantitative traits. It can load a separately saved GenomicSEM LDSC
+    of traits. It can load a separately saved GenomicSEM LDSC
     object or generate one from a validated summary-statistic manifest
-    containing tabular or GWAS-VCF inputs. The workflow restores and audits
+    containing tabular or GWAS-VCF inputs. The manifest is the only
+    summary-statistic input and is converted internally to the required
+    multi-trait FastASSET table. The workflow restores and audits
     trait labels, reorders the intercept covariance matrix,
     normalizes it to a trait correlation matrix, performs directional fastASSET
     subset testing, writes the ASSET fixed-effect Meta component, and records

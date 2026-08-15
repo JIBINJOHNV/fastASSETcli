@@ -76,8 +76,8 @@ coerce_manifest_text <- function(values) {
   text
 }
 
-read_ldsc_manifest <- function(path, analysis_traits) {
-  analysis_traits <- as.character(analysis_traits)
+read_ldsc_manifest <- function(path, analysis_traits = NULL) {
+  if (!is.null(analysis_traits)) analysis_traits <- as.character(analysis_traits)
   manifest <- data.table::fread(
     path,
     na.strings = c("", "NA", "N/A", "NULL", "."),
@@ -122,32 +122,31 @@ read_ldsc_manifest <- function(path, analysis_traits) {
     )
   }
 
-  missing_traits <- setdiff(analysis_traits, traits)
-  extra_traits <- setdiff(traits, analysis_traits)
-  trait_errors <- c()
-  if (length(missing_traits) > 0L) {
-    trait_errors <- c(
-      trait_errors,
-      paste0("missing from manifest: ", paste(missing_traits, collapse = ", "))
-    )
-  }
-  if (length(extra_traits) > 0L) {
-    trait_errors <- c(
-      trait_errors,
-      paste0("not present in FastASSET input: ", paste(extra_traits, collapse = ", "))
-    )
-  }
-  if (length(trait_errors) > 0L) {
-    stop(
-      "Automatic LDSC requires exactly one manifest row for every <trait>.Beta ",
-      "column:\n  ", paste(trait_errors, collapse = "\n  ")
-    )
+  if (!is.null(analysis_traits)) {
+    missing_traits <- setdiff(analysis_traits, traits)
+    extra_traits <- setdiff(traits, analysis_traits)
+    trait_errors <- c()
+    if (length(missing_traits) > 0L) {
+      trait_errors <- c(
+        trait_errors,
+        paste0("missing from manifest: ", paste(missing_traits, collapse = ", "))
+      )
+    }
+    if (length(extra_traits) > 0L) {
+      trait_errors <- c(
+        trait_errors,
+        paste0("not present in analysis input: ", paste(extra_traits, collapse = ", "))
+      )
+    }
+    if (length(trait_errors) > 0L) {
+      stop(
+        "The manifest and prepared analysis input must contain exactly the ",
+        "same traits:\n  ", paste(trait_errors, collapse = "\n  ")
+      )
+    }
   }
 
   input_files <- resolve_manifest_paths(manifest[[file_column]], path)
-  if (anyDuplicated(input_files)) {
-    stop("Each LDSC manifest trait must use a distinct summary-statistic file.")
-  }
   source_format <- ifelse(is_vcf_summary_path(input_files), "VCF", "TABLE")
   vcf_sample <- if (is.na(sample_column)) {
     rep(NA_character_, nrow(manifest))
@@ -156,6 +155,21 @@ read_ldsc_manifest <- function(path, analysis_traits) {
   }
   if (any(source_format != "VCF" & !is.na(vcf_sample))) {
     stop("Manifest SAMPLE values are only valid for VCF/BCF input files.")
+  }
+  duplicated_files <- unique(input_files[duplicated(input_files)])
+  if (length(duplicated_files) > 0L) {
+    for (duplicated_file in duplicated_files) {
+      rows <- which(input_files == duplicated_file)
+      if (any(source_format[rows] != "VCF") ||
+          any(is.na(vcf_sample[rows])) ||
+          anyDuplicated(vcf_sample[rows])) {
+        stop(
+          "A summary-statistic FILE can be repeated only for distinct, explicitly ",
+          "named samples in a multi-sample VCF/BCF. Invalid repeated FILE: ",
+          duplicated_file
+        )
+      }
+    }
   }
 
   sample_size <- if (is.na(n_column)) {
@@ -227,7 +241,11 @@ read_ldsc_manifest <- function(path, analysis_traits) {
     vcf_study_type = NA_character_,
     vcf_has_info = NA
   )
-  resolved[["order"]] <- match(resolved[["trait"]], analysis_traits)
+  resolved[["order"]] <- if (is.null(analysis_traits)) {
+    seq_len(nrow(resolved))
+  } else {
+    match(resolved[["trait"]], analysis_traits)
+  }
   if (anyNA(resolved[["order"]])) {
     stop("Internal error while reordering the LDSC manifest.")
   }
@@ -983,7 +1001,7 @@ save_generated_ldsc <- function(object, object_name, path) {
   invisible(path)
 }
 
-generate_ldsc_object <- function(params, analysis_traits) {
+generate_ldsc_object <- function(params, analysis_traits, prepared_input) {
   if (!requireNamespace("GenomicSEM", quietly = TRUE)) {
     stop(
       "Automatic-LDSC mode requires the GenomicSEM package. Re-run install.sh ",
@@ -991,7 +1009,13 @@ generate_ldsc_object <- function(params, analysis_traits) {
     )
   }
 
-  manifest <- read_ldsc_manifest(params$sumstats_manifest, analysis_traits)
+  manifest <- data.table::copy(prepared_input$manifest)
+  if (!identical(as.character(manifest[["trait"]]), as.character(analysis_traits))) {
+    stop(
+      "Internal trait-order mismatch between the prepared manifest input and ",
+      "automatic LDSC generation."
+    )
+  }
   reference_files <- validate_ld_reference(params)
   signature <- make_ldsc_generation_signature(
     params, manifest, reference_files
@@ -1019,11 +1043,6 @@ generate_ldsc_object <- function(params, analysis_traits) {
       reused = TRUE
     ))
   }
-
-  vcf_preparation <- prepare_manifest_vcf_files(
-    params, manifest, generation_dir
-  )
-  manifest <- vcf_preparation$manifest
 
   manifest[, munged_prefix := file.path(
     munge_dir, sprintf("trait_%04d", order)
@@ -1078,7 +1097,11 @@ generate_ldsc_object <- function(params, analysis_traits) {
       SNP = "SNP", A1 = "A1", A2 = "A2", effect = "BETA",
       P = "P", N = "N", MAF = "MAF"
     )
-    run_munge_group(table_rows, params$munge_column_map, "table")
+    genomicsem_map <- params$munge_column_map[
+      names(params$munge_column_map) %in%
+        c("SNP", "A1", "A2", "effect", "INFO", "P", "N", "MAF", "Z")
+    ]
+    run_munge_group(table_rows, genomicsem_map, "table")
     run_munge_group(
       vcf_info_rows, c(vcf_map, list(INFO = "INFO")), "vcf_info"
     )
@@ -1143,7 +1166,7 @@ generate_ldsc_object <- function(params, analysis_traits) {
       params$ldsc_chr, params$ld_ref, params$wld_ref, params$hm3,
       params$sumstats_manifest, params$munge_info_filter,
       params$munge_maf_filter, params$munge_cores,
-      vcf_preparation$bcftools, vcf_preparation$bcftools_version,
+      prepared_input$bcftools, prepared_input$bcftools_version,
       params$vcf_cores, sum(manifest$source_format == "VCF"),
       if (is.na(params$ldsc_chisq_max)) "AUTO" else params$ldsc_chisq_max,
       params$ldsc_object_name, rdata
@@ -1166,7 +1189,7 @@ generate_ldsc_object <- function(params, analysis_traits) {
   )
 }
 
-resolve_ldsc_source <- function(params, analysis_traits) {
+resolve_ldsc_source <- function(params, analysis_traits, prepared_input) {
   if (params$ldsc_mode == "existing") {
     return(list(
       path = params$ldsc_rdata,
@@ -1175,5 +1198,5 @@ resolve_ldsc_source <- function(params, analysis_traits) {
       reused = NA
     ))
   }
-  generate_ldsc_object(params, analysis_traits)
+  generate_ldsc_object(params, analysis_traits, prepared_input)
 }

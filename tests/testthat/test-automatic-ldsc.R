@@ -1,7 +1,7 @@
 test_that("omitting ldsc-rdata selects validated automatic mode", {
   expect_error(
     fastASSETcli:::parse_fastasset_cli(c(
-      "--fastasset-input", "input.tsv.gz",
+      "--sumstats-manifest", "manifest.tsv",
       "--output-dir", "output",
       "--run-name", "test"
     )),
@@ -12,9 +12,8 @@ test_that("omitting ldsc-rdata selects validated automatic mode", {
 test_that("existing and automatic LDSC inputs cannot be mixed", {
   expect_error(
     fastASSETcli:::parse_fastasset_cli(c(
-      "--fastasset-input", "input.tsv.gz",
-      "--ldsc-rdata", "ldsc.RData",
       "--sumstats-manifest", "manifest.tsv",
+      "--ldsc-rdata", "ldsc.RData",
       "--hm3", "hm3.txt",
       "--ld-ref", "ld",
       "--output-dir", "output",
@@ -24,13 +23,53 @@ test_that("existing and automatic LDSC inputs cannot be mixed", {
   )
 })
 
+test_that("the removed fastasset-input option is rejected", {
+  expect_error(
+    fastASSETcli:::parse_fastasset_cli(c(
+      "--fastasset-input", "wide.tsv.gz",
+      "--sumstats-manifest", "manifest.tsv",
+      "--output-dir", "output",
+      "--run-name", "test"
+    )),
+    "Unknown option.*--fastasset-input"
+  )
+  expect_false(grepl(
+    "--fastasset-input", fastASSETcli:::fastasset_cli_help(), fixed = TRUE
+  ))
+})
+
+test_that("existing LDSC mode is fully specified by manifest and LDSC object", {
+  directory <- tempfile("manifest_existing_ldsc_test_")
+  dir.create(directory)
+  summary_file <- file.path(directory, "trait.tsv")
+  manifest <- file.path(directory, "manifest.tsv")
+  ldsc <- file.path(directory, "ldsc.RData")
+  writeLines("ID\tA1\tA2\tBETA\tSE\tNEF\nrs1\tA\tG\t0.1\t0.02\t100", summary_file)
+  writeLines(
+    "TRAIT\tFILE\ntrait_one\ttrait.tsv",
+    manifest
+  )
+  writeLines("placeholder", ldsc)
+  params <- fastASSETcli:::parse_fastasset_cli(c(
+    "--sumstats-manifest", manifest,
+    "--ldsc-rdata", ldsc,
+    "--output-dir", directory,
+    "--run-name", "test"
+  ))
+  expect_identical(params$ldsc_mode, "existing")
+  expect_false("fastasset_input" %in% names(params))
+})
+
 test_that("GenomicSEM column mapping is parsed exactly", {
   mapping <- fastASSETcli:::parse_munge_column_map(
-    "SNP=ID,A1=EA,A2=NEA,effect=BETA,N=NEF"
+    "SNP=ID,A1=EA,A2=NEA,effect=BETA,SE=SE,N=NEF"
   )
   expect_identical(
     mapping,
-    list(SNP = "ID", A1 = "EA", A2 = "NEA", effect = "BETA", N = "NEF")
+    list(
+      SNP = "ID", A1 = "EA", A2 = "NEA", effect = "BETA", SE = "SE",
+      N = "NEF"
+    )
   )
   expect_error(
     fastASSETcli:::parse_munge_column_map("N=NEF,N=SS"),
@@ -38,7 +77,7 @@ test_that("GenomicSEM column mapping is parsed exactly", {
   )
 })
 
-test_that("manifest traits are validated and reordered", {
+test_that("manifest row order is canonical and explicit reordering remains validated", {
   directory <- tempfile("ldsc_manifest_test_")
   dir.create(directory)
   file_a <- file.path(directory, "a.tsv")
@@ -55,13 +94,96 @@ test_that("manifest traits are validated and reordered", {
     manifest
   )
 
-  resolved <- fastASSETcli:::read_ldsc_manifest(
-    manifest, c("trait_a", "trait_b")
-  )
+  canonical <- fastASSETcli:::read_ldsc_manifest(manifest)
+  expect_equal(as.character(canonical$trait), c("trait_b", "trait_a"))
+  expect_identical(canonical$order, 1:2)
+
+  resolved <- fastASSETcli:::read_ldsc_manifest(manifest, c("trait_a", "trait_b"))
   expect_equal(as.character(resolved$trait), c("trait_a", "trait_b"))
   expect_true(all(is.na(resolved$sample_prev)))
   expect_true(all(is.na(resolved$population_prev)))
   expect_identical(resolved$order, 1:2)
+})
+
+test_that("manifest tables construct wide input and align swapped effects", {
+  directory <- tempfile("manifest_wide_test_")
+  dir.create(directory)
+  file_a <- file.path(directory, "a.tsv")
+  file_b <- file.path(directory, "b.tsv")
+  writeLines(
+    c(
+      "ID\tEA\tNEA\tBETA\tSE\tNEF",
+      "rs1\tA\tG\t0.2\t0.05\t100",
+      "rs2\tC\tT\t-0.1\t0.04\t90"
+    ),
+    file_a
+  )
+  writeLines(
+    c(
+      "ID\tEA\tNEA\tBETA\tSE\tNEF",
+      "rs1\tG\tA\t0.3\t0.06\t200",
+      "rs3\tA\tC\t0.4\t0.07\t180"
+    ),
+    file_b
+  )
+  manifest_file <- file.path(directory, "manifest.tsv")
+  writeLines(
+    c(
+      "TRAIT\tFILE\tN\tSAMPLE\tSAMPLE_PREV\tPOPULATION_PREV",
+      "trait_a\ta.tsv\tNA\tNA\tNA\tNA",
+      "trait_b\tb.tsv\tNA\tNA\tNA\tNA"
+    ),
+    manifest_file
+  )
+  manifest <- fastASSETcli:::read_ldsc_manifest(manifest_file)
+  output <- file.path(directory, "wide.tsv.gz")
+  audit <- file.path(directory, "audit.tsv")
+  alleles <- file.path(directory, "alleles.tsv.gz")
+  built <- fastASSETcli:::build_manifest_fastasset_input(
+    manifest,
+    list(munge_column_map = list()),
+    output,
+    audit,
+    alleles
+  )
+  wide <- data.table::fread(built$path)
+  expect_identical(
+    names(wide),
+    c(
+      "ID", "trait_a.Beta", "trait_a.SE", "trait_a.NEF",
+      "trait_b.Beta", "trait_b.SE", "trait_b.NEF"
+    )
+  )
+  expect_equal(wide[ID == "rs1", trait_b.Beta], -0.3)
+  expect_true(is.na(wide[ID == "rs2", trait_b.Beta]))
+  expect_equal(wide[ID == "rs3", trait_b.NEF], 180)
+  expect_equal(data.table::fread(audit)[trait == "trait_b", allele_flips_to_reference], 1)
+})
+
+test_that("binary FastASSET Neff follows the original reference definition", {
+  directory <- tempfile("binary_neff_test_")
+  dir.create(directory)
+  summary_file <- file.path(directory, "binary.tsv")
+  writeLines(
+    c(
+      "ID\tA1\tA2\tBETA\tSE\tNC\tNCO\tN",
+      "rs1\tA\tG\t0.2\t0.05\t100\t900\t1000"
+    ),
+    summary_file
+  )
+  row <- data.table::data.table(
+    order = 1L, trait = "binary", source_file = summary_file,
+    file = summary_file, source_format = "TABLE", N = NA_real_,
+    sample_prev = 0.1, population_prev = 0.02
+  )
+  result <- fastASSETcli:::read_manifest_trait_for_fastasset(
+    row, list(munge_column_map = list())
+  )
+  expect_equal(result$table$NEF, 90)
+  expect_match(
+    result$audit$fastasset_neff_source,
+    "NC\\*NCO/\\(NC\\+NCO\\)"
+  )
 })
 
 test_that("VCF manifests allow automatic binary sample prevalence", {
@@ -194,6 +316,16 @@ test_that("bcftools creates an audited LDSC table from GWAS-VCF", {
   expect_identical(converted$A1, "G")
   expect_identical(converted$A2, "A")
   expect_true(file.exists(metadata))
+
+  manifest_row <- data.table::data.table(
+    order = 1L, trait = "trait_one", source_file = vcf,
+    file = output, source_format = "VCF", N = NA_real_,
+    sample_prev = result$sample_prev, population_prev = 0.02
+  )
+  analysis <- fastASSETcli:::read_manifest_trait_for_fastasset(
+    manifest_row, list(munge_column_map = list())
+  )
+  expect_equal(analysis$table$NEF, 90)
 })
 
 test_that("generated LDSC matrices receive exact two-axis names", {

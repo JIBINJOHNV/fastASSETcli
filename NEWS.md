@@ -1,3 +1,17 @@
+# fastASSETcli 0.4.0
+
+- Removed the public `--fastasset-input` option. The per-trait
+  `--sumstats-manifest` is now the only summary-statistic input in both
+  existing-LDSC and automatic-LDSC modes.
+- Added deterministic construction of the internal `ID` plus
+  `<trait>.Beta/.SE/.NEF` table in manifest row order.
+- Added cross-trait A1/A2 verification: swapped pairs flip BETA and
+  incompatible pairs fail before analysis.
+- Added original-reference binary FastASSET effective sample size,
+  `Ncase*Ncontrol/(Ncase+Ncontrol)`, while preserving direct quantitative NEF.
+- Added preparation provenance, allele-reference and per-trait build-audit
+  outputs with signature-protected reuse.
+
 # fastASSETcli 0.3.0
 
 - Added automatic `bcftools` conversion for `.vcf`, `.vcf.gz`, `.vcf.bgz`,

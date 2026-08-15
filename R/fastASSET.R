@@ -1,8 +1,9 @@
-# Reference-aligned fastASSET core for quantitative traits.
+# Reference-aligned fastASSET core.
 #
 # Important choices:
-#   * NEF is used directly. For the user's quantitative traits, NEF is the
-#     total analyzed sample size; no case/control conversion is performed.
+#   * The internal NEF field is the upstream fastASSET sample-size quantity:
+#     total analyzed N for quantitative traits and Ncase*Ncontrol/(Ncase+
+#     Ncontrol) for binary traits.
 #   * ASSET is called with side = 2 and search = 2. Fixed-effect Meta output is
 #     included by default but does not change the directional subset search.
 #   * The default computational guard is 16 screened traits per direction.
@@ -331,7 +332,7 @@ fast_asset_2 <- function(snp, traits.lab, beta.hat, sigma.hat, Neff, cor, block,
   Neff <- Neff[valid]
   names(beta.hat) <- names(sigma.hat) <- names(Neff) <- valid_traits
 
-  # Reference transformation. For quantitative traits Neff is total N.
+  # Reference transformation. Neff follows the upstream fastASSET definition.
   beta.standardized <- beta.hat / sigma.hat / sqrt(Neff)
   sigma.standardized <- 1 / sqrt(Neff)
 

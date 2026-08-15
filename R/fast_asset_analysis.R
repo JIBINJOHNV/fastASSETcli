@@ -189,13 +189,13 @@ detect_fastasset_columns <- function(column_names) {
     sample_size_columns <- legacy_n_columns
     sample_size_suffix <- ".N"
     warning(
-      "Using legacy <trait>.N columns as quantitative NEF. Values are used ",
+      "Using legacy <trait>.N columns as FastASSET NEF. Values are used ",
       "directly with no conversion. Rename them to <trait>.NEF for clarity."
     )
   } else {
     missing_nef <- setdiff(nef_columns, column_names)
     stop(
-      "Missing quantitative effective-sample-size columns. Expected ",
+      "Missing FastASSET effective-sample-size columns. Expected ",
       "<trait>.NEF for every trait. Missing: ",
       paste(missing_nef, collapse = ", ")
     )
@@ -307,7 +307,7 @@ run_fastasset_chunk <- function(chunk_id, chunk_input_file, output_dir,
       chunk[row_index, ..se_columns],
       use.names = FALSE
     ))
-    # Quantitative NEF is total analyzed N and is used directly.
+    # NEF was prepared according to the upstream trait-type-specific rule.
     nef <- as.numeric(unlist(
       chunk[row_index, ..sample_size_columns],
       use.names = FALSE
@@ -413,7 +413,7 @@ summarize_qc_files <- function(qc_files) {
   data.table::rbindlist(counts)[, .(N = sum(N)), by = .(status, severity)]
 }
 
-run_fastasset_stage <- function(fastasset_input, correlation, blocks,
+run_fastasset_stage <- function(analysis_input, correlation, blocks,
                                 output_dir, columns, params) {
   if (.Platform$OS.type == "windows" && params$ncores > 1L) {
     stop("This parallel implementation uses forked workers and requires Linux/macOS.")
@@ -425,9 +425,9 @@ run_fastasset_stage <- function(fastasset_input, correlation, blocks,
   dir.create(input_chunk_dir, recursive = TRUE, showWarnings = FALSE)
   dir.create(result_chunk_dir, recursive = TRUE, showWarnings = FALSE)
 
-  message("Reading fastASSET wide input: ", fastasset_input)
-  input <- data.table::fread(fastasset_input, check.names = FALSE)
-  if (!"ID" %in% names(input)) stop("fastasset_input is missing the ID column.")
+  message("Reading manifest-derived FastASSET input: ", analysis_input)
+  input <- data.table::fread(analysis_input, check.names = FALSE)
+  if (!"ID" %in% names(input)) stop("Prepared analysis input is missing the ID column.")
   if (anyNA(input$ID) || any(!nzchar(as.character(input$ID)))) {
     stop("Every ID value must be non-missing and non-empty.")
   }
@@ -440,7 +440,7 @@ run_fastasset_stage <- function(fastasset_input, correlation, blocks,
     ceiling(seq_len(nrow(input)) / params$chunk_size)
   )
   n_chunks <- length(row_groups)
-  if (n_chunks == 0L) stop("fastasset_input has no rows.")
+  if (n_chunks == 0L) stop("Prepared analysis input has no rows.")
 
   message(
     "Materializing ", n_chunks, " input chunks for ", nrow(input),
@@ -584,10 +584,20 @@ run_fastasset_stage <- function(fastasset_input, correlation, blocks,
 run_asset_pipeline <- function(params) {
   check_required_packages()
 
+  prepared_input <- prepare_manifest_analysis_input(params)
+  params$analysis_input <- prepared_input$path
+  params$input_preparation_dir <- prepared_input$preparation_dir
+  params$input_preparation_signature <- prepared_input$signature
+
   input_header <- names(data.table::fread(
-    params$fastasset_input, nrows = 0L, check.names = FALSE
+    params$analysis_input, nrows = 0L, check.names = FALSE
   ))
   columns <- detect_fastasset_columns(input_header)
+  if (!identical(columns$traits, prepared_input$traits)) {
+    stop(
+      "Prepared FastASSET trait order does not exactly match manifest row order."
+    )
+  }
   if (length(columns$traits) < params$min_available_traits) {
     stop(
       "Input has only ", length(columns$traits), " traits but min_available_traits is ",
@@ -596,11 +606,14 @@ run_asset_pipeline <- function(params) {
   }
 
   message(
-    "Detected ", length(columns$traits), " quantitative traits; sample-size suffix is ",
-    columns$sample_size_suffix, ". NEF values will be used directly."
+    "Detected ", length(columns$traits), " manifest traits; sample-size suffix is ",
+    columns$sample_size_suffix,
+    ". Prepared NEF values follow the upstream fastASSET definition."
   )
 
-  ldsc_source <- resolve_ldsc_source(params, columns$traits)
+  ldsc_source <- resolve_ldsc_source(
+    params, columns$traits, prepared_input
+  )
   params$ldsc_rdata <- ldsc_source$path
   params$ldsc_generation_dir <- ldsc_source$generation_dir
   params$ldsc_generation_signature <- ldsc_source$signature
@@ -670,7 +683,8 @@ run_asset_pipeline <- function(params) {
       "minimum_correlation_eigenvalue", "ldsc_mode", "ldsc_rdata",
       "ldsc_object_name", "ldsc_generation_dir",
       "ldsc_generation_signature", "ldsc_trait_name_source",
-      "number_ldsc_traits"
+      "number_ldsc_traits", "sumstats_manifest", "analysis_input",
+      "input_preparation_dir", "input_preparation_signature"
     ),
     value = as.character(c(
       signature, length(columns$traits), columns$sample_size_suffix,
@@ -680,7 +694,9 @@ run_asset_pipeline <- function(params) {
       attr(correlation, "minimum_eigenvalue"), params$ldsc_mode,
       params$ldsc_rdata, ldsc_extraction$object_name,
       params$ldsc_generation_dir, params$ldsc_generation_signature,
-      ldsc_extraction$trait_name_source, ldsc_extraction$n_ldsc_traits
+      ldsc_extraction$trait_name_source, ldsc_extraction$n_ldsc_traits,
+      params$sumstats_manifest, params$analysis_input,
+      params$input_preparation_dir, params$input_preparation_signature
     ))
   )
   data.table::fwrite(
@@ -690,7 +706,7 @@ run_asset_pipeline <- function(params) {
   )
 
   outputs <- run_fastasset_stage(
-    fastasset_input = params$fastasset_input,
+    analysis_input = params$analysis_input,
     correlation = correlation,
     blocks = blocks,
     output_dir = analysis_dir,
@@ -699,6 +715,8 @@ run_asset_pipeline <- function(params) {
   )
   outputs$ldsc_rdata <- params$ldsc_rdata
   outputs$ldsc_generation_dir <- params$ldsc_generation_dir
+  outputs$analysis_input <- params$analysis_input
+  outputs$input_preparation_dir <- params$input_preparation_dir
 
   message("fastASSET analysis completed: ", analysis_dir)
   invisible(outputs)
