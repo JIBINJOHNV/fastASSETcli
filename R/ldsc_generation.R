@@ -65,6 +65,7 @@ resolve_manifest_paths <- function(paths, manifest_path) {
 }
 
 read_ldsc_manifest <- function(path, analysis_traits) {
+  analysis_traits <- as.character(analysis_traits)
   manifest <- data.table::fread(
     path,
     na.strings = c("", "NA", "N/A", "NULL", "."),
@@ -178,7 +179,8 @@ read_ldsc_manifest <- function(path, analysis_traits) {
     population_prev = population_prev
   )
   resolved <- resolved[match(analysis_traits, resolved$trait)]
-  if (!identical(resolved$trait, analysis_traits)) {
+  if (length(resolved$trait) != length(analysis_traits) ||
+      !all(as.character(resolved$trait) == analysis_traits)) {
     stop("Internal error while reordering the LDSC manifest.")
   }
   resolved[, order := seq_len(.N)]

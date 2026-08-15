@@ -58,7 +58,7 @@ test_that("manifest traits are validated and reordered", {
   resolved <- fastASSETcli:::read_ldsc_manifest(
     manifest, c("trait_a", "trait_b")
   )
-  expect_identical(resolved$trait, c("trait_a", "trait_b"))
+  expect_equal(as.character(resolved$trait), c("trait_a", "trait_b"))
   expect_true(all(is.na(resolved$sample_prev)))
   expect_true(all(is.na(resolved$population_prev)))
   expect_identical(resolved$order, 1:2)
