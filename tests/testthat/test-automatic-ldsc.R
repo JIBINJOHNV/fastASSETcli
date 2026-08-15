@@ -114,7 +114,8 @@ test_that("manifest tables construct wide input and align swapped effects", {
     c(
       "ID\tEA\tNEA\tBETA\tSE\tNEF",
       "rs1\tA\tG\t0.2\t0.05\t100",
-      "rs2\tC\tT\t-0.1\t0.04\t90"
+      "rs2\tC\tT\t-0.1\t0.04\t90",
+      "rs4\tG\tT\t0.5\t0.08\t80"
     ),
     file_a
   )
@@ -123,7 +124,8 @@ test_that("manifest tables construct wide input and align swapped effects", {
       "ID\tEA\tNEA\tBETA\tSE\tNEF",
       "rs1\tG\tA\t0.3\t0.06\t200",
       "rs2\tC\tT\t-0.2\t0.05\t190",
-      "rs3\tA\tC\t0.4\t0.07\t180"
+      "rs3\tA\tC\t0.4\t0.07\t180",
+      "rs4\tA\tC\t0.6\t0.09\t170"
     ),
     file_b
   )
@@ -140,12 +142,14 @@ test_that("manifest tables construct wide input and align swapped effects", {
   output <- file.path(directory, "wide.tsv.gz")
   audit <- file.path(directory, "audit.tsv")
   alleles <- file.path(directory, "alleles.tsv.gz")
+  failed <- file.path(directory, "failed.tsv")
   built <- fastASSETcli:::build_manifest_fastasset_input(
     manifest,
     list(munge_column_map = list()),
     output,
     audit,
-    alleles
+    alleles,
+    failed
   )
   wide <- data.table::fread(built$path)
   expect_identical(
@@ -159,10 +163,14 @@ test_that("manifest tables construct wide input and align swapped effects", {
   expect_equal(wide[["trait_b.Beta"]][wide[["ID"]] == "rs2"], -0.2)
   expect_true(is.na(wide[["trait_a.Beta"]][wide[["ID"]] == "rs3"]))
   expect_equal(wide[["trait_b.NEF"]][wide[["ID"]] == "rs3"], 180)
+  incompatible_row <- wide[["ID"]] == "rs4"
+  expect_true(is.na(wide[["trait_b.Beta"]][incompatible_row]))
+  expect_true(is.na(wide[["trait_b.SE"]][incompatible_row]))
+  expect_true(is.na(wide[["trait_b.NEF"]][incompatible_row]))
   audit_table <- data.table::fread(audit)
   trait_a_row <- which(audit_table[["trait"]] == "trait_a")
   trait_b_row <- which(audit_table[["trait"]] == "trait_b")
-  expect_equal(audit_table[["reference_established_snps"]][trait_a_row], 2)
+  expect_equal(audit_table[["reference_established_snps"]][trait_a_row], 3)
   expect_equal(audit_table[["snps_absent_from_trait"]][trait_a_row], 1)
   expect_equal(
     audit_table[["exact_allele_matches_to_reference"]][trait_b_row], 1
@@ -173,10 +181,23 @@ test_that("manifest tables construct wide input and align swapped effects", {
   expect_equal(audit_table[["allele_flips_to_reference"]][trait_b_row], 1)
   expect_equal(audit_table[["reference_established_snps"]][trait_b_row], 1)
   expect_equal(audit_table[["snps_absent_from_trait"]][trait_b_row], 0)
-  expect_equal(audit_table[["incompatible_allele_matches"]][trait_b_row], 0)
+  expect_equal(audit_table[["incompatible_allele_matches"]][trait_b_row], 1)
+  expect_equal(built$n_failed_alignments, 1)
+  failed_table <- data.table::fread(failed)
+  expect_identical(failed_table[["trait"]], "trait_b")
+  expect_identical(failed_table[["ID"]], "rs4")
+  expect_identical(failed_table[["reference_A1"]], "G")
+  expect_identical(failed_table[["reference_A2"]], "T")
+  expect_identical(failed_table[["incoming_A1"]], "A")
+  expect_identical(failed_table[["incoming_A2"]], "C")
+  expect_identical(failed_table[["reason"]], "INCOMPATIBLE_ALLELES")
+  expect_identical(
+    failed_table[["action"]],
+    "BETA_SE_NEF_SET_TO_NA_TRAIT_EXCLUDED_FOR_SNP"
+  )
 })
 
-test_that("indexed allele alignment rejects incompatible pairs", {
+test_that("indexed allele alignment records and excludes incompatible pairs", {
   reference <- data.table::data.table(
     ID = "rs1", A1 = "A", A2 = "G", Beta = 0.2, SE = 0.05, NEF = 100
   )
@@ -186,10 +207,38 @@ test_that("indexed allele alignment rejects incompatible pairs", {
   incompatible <- data.table::data.table(
     ID = "rs1", A1 = "T", A2 = "C", Beta = 0.3, SE = 0.06, NEF = 200
   )
-  expect_error(
-    fastASSETcli:::append_fastasset_trait(master, incompatible, "trait_b"),
-    "Alleles are incompatible"
+  appended <- fastASSETcli:::append_fastasset_trait(
+    master, incompatible, "trait_b"
   )
+  expect_equal(appended$incompatible_matches, 1)
+  expect_true(is.na(appended$master[["trait_b.Beta"]][1L]))
+  expect_true(is.na(appended$master[["trait_b.SE"]][1L]))
+  expect_true(is.na(appended$master[["trait_b.NEF"]][1L]))
+  expect_identical(appended$failed_alignments[["trait"]], "trait_b")
+  expect_identical(appended$failed_alignments[["ID"]], "rs1")
+  expect_identical(
+    appended$failed_alignments[["reason"]], "INCOMPATIBLE_ALLELES"
+  )
+})
+
+test_that("missing SNP-trait values are removed before the ASSET call", {
+  traits <- c("trait_a", "trait_b")
+  correlation <- diag(2)
+  dimnames(correlation) <- list(traits, traits)
+  outcome <- fastASSETcli:::fast_asset_2(
+    snp = "rs1",
+    traits.lab = traits,
+    beta.hat = c(0.2, NA_real_),
+    sigma.hat = c(0.05, NA_real_),
+    Neff = c(100, NA_real_),
+    cor = correlation,
+    block = list(traits),
+    min_available_traits = 2L
+  )
+  expect_identical(outcome$qc$status, "INSUFFICIENT_VALID_TRAITS")
+  expect_equal(outcome$qc$n_valid_traits, 1L)
+  expect_identical(outcome$qc$invalid_traits, "trait_b")
+  expect_null(outcome$result)
 })
 
 test_that("binary FastASSET Neff follows the original reference definition", {

@@ -588,6 +588,7 @@ run_asset_pipeline <- function(params) {
   params$analysis_input <- prepared_input$path
   params$input_preparation_dir <- prepared_input$preparation_dir
   params$input_preparation_signature <- prepared_input$signature
+  params$failed_alignment_file <- prepared_input$failed_alignment_file
 
   input_header <- names(data.table::fread(
     params$analysis_input, nrows = 0L, check.names = FALSE
@@ -684,7 +685,8 @@ run_asset_pipeline <- function(params) {
       "ldsc_object_name", "ldsc_generation_dir",
       "ldsc_generation_signature", "ldsc_trait_name_source",
       "number_ldsc_traits", "sumstats_manifest", "analysis_input",
-      "input_preparation_dir", "input_preparation_signature"
+      "input_preparation_dir", "input_preparation_signature",
+      "failed_alignment_file"
     ),
     value = as.character(c(
       signature, length(columns$traits), columns$sample_size_suffix,
@@ -696,7 +698,8 @@ run_asset_pipeline <- function(params) {
       params$ldsc_generation_dir, params$ldsc_generation_signature,
       ldsc_extraction$trait_name_source, ldsc_extraction$n_ldsc_traits,
       params$sumstats_manifest, params$analysis_input,
-      params$input_preparation_dir, params$input_preparation_signature
+      params$input_preparation_dir, params$input_preparation_signature,
+      params$failed_alignment_file
     ))
   )
   data.table::fwrite(
@@ -717,6 +720,7 @@ run_asset_pipeline <- function(params) {
   outputs$ldsc_generation_dir <- params$ldsc_generation_dir
   outputs$analysis_input <- params$analysis_input
   outputs$input_preparation_dir <- params$input_preparation_dir
+  outputs$failed_alignment_file <- params$failed_alignment_file
 
   message("fastASSET analysis completed: ", analysis_dir)
   invisible(outputs)

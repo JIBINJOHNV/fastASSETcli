@@ -1,3 +1,18 @@
+# fastASSETcli 0.4.3
+
+- Changed incompatible cross-trait allele handling from a fatal error to an
+  auditable SNP-trait exclusion. BETA, SE, and NEF are set to `NA` only for
+  the incompatible trait at that SNP; compatible traits at the SNP remain.
+- Added `fastasset_failed_allele_alignments.tsv` with the trait, SNP ID,
+  source file, input row, reference alleles, incoming alleles, reason, and
+  action for every excluded SNP-trait observation.
+- Confirmed through regression tests that incompatible observations are not
+  passed to ASSET. The existing per-SNP validity filter analyzes the remaining
+  traits, or records `INSUFFICIENT_VALID_TRAITS` when fewer than the configured
+  minimum remain.
+- Updated the input-preparation cache signature and completion requirements so
+  a prepared input is reusable only when the failed-alignment report exists.
+
 # fastASSETcli 0.4.2
 
 - Retained the efficient single SNP-ID index plus exact/swapped allele

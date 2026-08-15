@@ -1,7 +1,7 @@
 # Installable fastASSET CLI package
 
 This repository installs the reviewed pipeline as the R package `fastASSETcli` and
-provides the shell command `fastasset`. Version 0.4.2 uses one per-trait
+provides the shell command `fastasset`. Version 0.4.3 uses one per-trait
 summary-statistic manifest as the complete analysis input. It can either load an
 existing GenomicSEM LDSC object or generate the object automatically from
 tabular or GWAS-VCF summary statistics before running FastASSET. The multi-trait
@@ -120,7 +120,9 @@ For binary traits, the original fastASSET definition is used:
 `Neff = NCASE*NCONTROL/(NCASE+NCONTROL)`. If case/control columns are absent,
 the equivalent `N*SAMPLE_PREV*(1-SAMPLE_PREV)` is used. Effect alleles are
 checked across all traits. An exactly swapped allele pair causes BETA to be
-flipped; an incompatible pair is a fatal harmonization error.
+flipped. For an incompatible pair, that trait's BETA, SE, and NEF are set to
+`NA` at the SNP and the failure is logged; compatible traits at the same SNP
+remain available for analysis.
 
 ```bash
 fastasset \
@@ -159,6 +161,7 @@ Automatic outputs are written under:
 ├── <run-name>_fastasset_wide.tsv.gz
 ├── fastasset_allele_reference.tsv.gz
 ├── fastasset_input_build_audit.tsv
+├── fastasset_failed_allele_alignments.tsv
 ├── manifest_resolved.tsv
 ├── input_preparation_provenance.tsv
 └── vcf_converted/                    # present only for VCF/BCF inputs
@@ -173,15 +176,20 @@ Automatic outputs are written under:
 
 The signature includes the trait order, summary-statistic metadata, reference
 metadata, prevalence values, and LDSC/munging settings. A completed matching
-object is reused; incompatible or incomplete outputs are not silently reused.
+object is reused; signature-incompatible or incomplete outputs are not
+silently reused.
 
 FastASSET input construction creates the SNP-ID union once and fills it by
 indexed matching; it does not repeatedly merge the growing wide table. The
 build audit reports, for every trait, exact allele matches, swapped matches and
 BETA flips, SNPs that establish a new reference orientation, SNPs absent from
-that trait after forming the final union, and incompatible matches. A completed
-run always has zero incompatible matches because any incompatible allele pair
-stops input construction immediately.
+that trait after forming the final union, and incompatible matches. Each
+incompatible SNP-trait observation is written to
+`fastasset_failed_allele_alignments.tsv`; its BETA, SE, and NEF are stored as
+`NA` in the wide table. Before calling ASSET, the wrapper removes non-finite
+trait observations and subsets the correlation matrix to the remaining valid
+traits. If fewer than `--min-available-traits` remain, the SNP is not sent to
+ASSET and receives `INSUFFICIENT_VALID_TRAITS` in the analysis QC output.
 
 Important for 200–250 traits: current GenomicSEM automatically increases the
 jackknife blocks above 18 traits to
@@ -197,7 +205,7 @@ installed normally:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.4.2.tar.gz
+R CMD INSTALL release/fastASSETcli_0.4.3.tar.gz
 ```
 
 The executable inside an installed package can be located with:
@@ -213,6 +221,9 @@ Rscript -e 'cat(system.file("exec", "fastasset", package="fastASSETcli"))'
 - Quantitative `NEF` is used directly as total analyzed sample size.
 - Binary fastASSET `Neff` is calculated as
   `NCASE*NCONTROL/(NCASE+NCONTROL)`, matching the upstream reference.
+- Incompatible allele pairs exclude only the affected SNP-trait observation;
+  BETA, SE, and NEF become `NA`, the failure is logged, and compatible traits
+  at the SNP continue through FastASSET.
 - Automatic LDSC accepts tabular or GWAS-VCF manifest files; VCF binary
   per-SNP total sample size is `NC+NCO`, and its trait-level sample prevalence
   is `median(NC)/(median(NC)+median(NCO))`. Quantitative VCF `NEF` is used
@@ -231,7 +242,7 @@ The detailed supplied-code comparison is installed with the package under
 
 ## Release archive
 
-`release/fastASSETcli_0.4.2.tar.gz` is the current installable source-package
+`release/fastASSETcli_0.4.3.tar.gz` is the current installable source-package
 archive. Earlier archives remain available for reproducibility. The editable
 package source remains at the repository root; an archive is not a substitute
 for version-controlled source code.
