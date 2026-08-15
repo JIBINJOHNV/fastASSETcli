@@ -600,6 +600,11 @@ run_asset_pipeline <- function(params) {
     columns$sample_size_suffix, ". NEF values will be used directly."
   )
 
+  ldsc_source <- resolve_ldsc_source(params, columns$traits)
+  params$ldsc_rdata <- ldsc_source$path
+  params$ldsc_generation_dir <- ldsc_source$generation_dir
+  params$ldsc_generation_signature <- ldsc_source$signature
+
   ldsc_extraction <- extract_genomicsem_ldsc(
     path = params$ldsc_rdata,
     object_name = params$ldsc_object_name,
@@ -662,17 +667,20 @@ run_asset_pipeline <- function(params) {
       "run_signature", "number_input_traits", "sample_size_suffix",
       "scr_pthr", "max_numtraits_per_side", "min_available_traits",
       "cor_thr", "meth_pval", "include_meta", "ncores", "chunk_size",
-      "minimum_correlation_eigenvalue", "ldsc_rdata", "ldsc_object_name",
-      "ldsc_trait_name_source", "number_ldsc_traits"
+      "minimum_correlation_eigenvalue", "ldsc_mode", "ldsc_rdata",
+      "ldsc_object_name", "ldsc_generation_dir",
+      "ldsc_generation_signature", "ldsc_trait_name_source",
+      "number_ldsc_traits"
     ),
     value = as.character(c(
       signature, length(columns$traits), columns$sample_size_suffix,
       params$scr_pthr, params$max_numtraits_per_side,
       params$min_available_traits, params$cor_thr, params$meth_pval,
       params$include_meta, params$ncores, params$chunk_size,
-      attr(correlation, "minimum_eigenvalue"), params$ldsc_rdata,
-      ldsc_extraction$object_name, ldsc_extraction$trait_name_source,
-      ldsc_extraction$n_ldsc_traits
+      attr(correlation, "minimum_eigenvalue"), params$ldsc_mode,
+      params$ldsc_rdata, ldsc_extraction$object_name,
+      params$ldsc_generation_dir, params$ldsc_generation_signature,
+      ldsc_extraction$trait_name_source, ldsc_extraction$n_ldsc_traits
     ))
   )
   data.table::fwrite(
@@ -689,6 +697,8 @@ run_asset_pipeline <- function(params) {
     columns = columns,
     params = params
   )
+  outputs$ldsc_rdata <- params$ldsc_rdata
+  outputs$ldsc_generation_dir <- params$ldsc_generation_dir
 
   message("fastASSET analysis completed: ", analysis_dir)
   invisible(outputs)

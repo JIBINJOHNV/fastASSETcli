@@ -35,8 +35,24 @@ if (!requireNamespace("ASSET", quietly = TRUE)) {
   )
 }
 
-missing <- c("data.table", "ASSET")[!vapply(
-  c("data.table", "ASSET"),
+if (!requireNamespace("GenomicSEM", quietly = TRUE)) {
+  if (!requireNamespace("remotes", quietly = TRUE)) {
+    install.packages(
+      "remotes",
+      lib = library_directory,
+      repos = "https://cloud.r-project.org"
+    )
+  }
+  remotes::install_github(
+    "GenomicSEM/GenomicSEM",
+    lib = library_directory,
+    dependencies = c("Depends", "Imports", "LinkingTo"),
+    upgrade = "never"
+  )
+}
+
+missing <- c("data.table", "ASSET", "GenomicSEM")[!vapply(
+  c("data.table", "ASSET", "GenomicSEM"),
   requireNamespace,
   logical(1L),
   quietly = TRUE

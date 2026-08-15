@@ -33,6 +33,7 @@ fastasset_cli_main <- function(arguments = commandArgs(trailingOnly = TRUE)) {
 
   outputs <- run_asset_pipeline(params)
   cat("\nCompleted outputs:\n")
+  cat("  LDSC:    ", outputs$ldsc_rdata, "\n", sep = "")
   cat("  results: ", outputs$results, "\n", sep = "")
   cat("  meta:    ", outputs$meta, "\n", sep = "")
   cat("  QC:      ", outputs$qc, "\n", sep = "")

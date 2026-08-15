@@ -1,8 +1,15 @@
+make_text_signature <- function(values, width = 12L) {
+  signature_file <- tempfile("fastasset_signature_", fileext = ".txt")
+  on.exit(unlink(signature_file, force = TRUE), add = TRUE)
+  writeLines(as.character(values), signature_file, useBytes = TRUE)
+  unname(substr(tools::md5sum(signature_file), 1L, width))
+}
+
 make_run_signature <- function(params, trait_names, correlation_matrix) {
   input_info <- file.info(params$fastasset_input)
   ldsc_info <- file.info(params$ldsc_rdata)
   signature_values <- c(
-    "pipeline_version=2026-08-15-reference-aligned-cli-meta-v2",
+    "pipeline_version=2026-08-15-reference-aligned-cli-meta-v3-auto-ldsc",
     paste0("input=", params$fastasset_input),
     paste0("input_size=", input_info$size),
     paste0("input_mtime=", as.numeric(input_info$mtime)),
@@ -10,6 +17,7 @@ make_run_signature <- function(params, trait_names, correlation_matrix) {
     paste0("ldsc_size=", ldsc_info$size),
     paste0("ldsc_mtime=", as.numeric(ldsc_info$mtime)),
     paste0("ldsc_object=", params$ldsc_object_name),
+    paste0("ldsc_mode=", params$ldsc_mode),
     paste0("traits=", paste(trait_names, collapse = ";")),
     paste0("scr_pthr=", format(params$scr_pthr, digits = 16)),
     paste0("max_side=", params$max_numtraits_per_side),
@@ -21,10 +29,7 @@ make_run_signature <- function(params, trait_names, correlation_matrix) {
     paste0("cor=", paste(format(correlation_matrix, digits = 12), collapse = ";"))
   )
 
-  signature_file <- tempfile("fastasset_signature_", fileext = ".txt")
-  on.exit(unlink(signature_file, force = TRUE), add = TRUE)
-  writeLines(signature_values, signature_file, useBytes = TRUE)
-  unname(substr(tools::md5sum(signature_file), 1L, 12L))
+  make_text_signature(signature_values)
 }
 
 order_chunk_files <- function(files) {
@@ -76,7 +81,7 @@ combine_tsv_gz <- function(files, output_file) {
 
 capture_environment <- function(output_dir) {
   writeLines(
-    capture.output(sessionInfo()),
+    utils::capture.output(utils::sessionInfo()),
     file.path(output_dir, "sessionInfo.txt")
   )
 
