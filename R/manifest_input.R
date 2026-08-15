@@ -231,6 +231,9 @@ read_manifest_trait_for_fastasset <- function(manifest_row, params) {
 }
 
 append_fastasset_trait <- function(master, incoming, trait) {
+  exact_matches <- 0L
+  swapped_matches <- 0L
+  incompatible_matches <- 0L
   if (is.null(master)) {
     master <- data.table::data.table(
       ID = incoming[["ID"]],
@@ -252,6 +255,9 @@ append_fastasset_trait <- function(master, incoming, trait) {
       swapped <- incoming[["A1"]][existing] == reference_a2 &
         incoming[["A2"]][existing] == reference_a1
       incompatible <- !(exact | swapped)
+      exact_matches <- sum(exact)
+      swapped_matches <- sum(swapped)
+      incompatible_matches <- sum(incompatible)
       if (any(incompatible)) {
         affected <- incoming[["ID"]][existing][incompatible]
         stop(
@@ -285,7 +291,14 @@ append_fastasset_trait <- function(master, incoming, trait) {
   data.table::set(master, i = index, j = paste0(trait, ".Beta"), value = beta)
   data.table::set(master, i = index, j = paste0(trait, ".SE"), value = incoming[["SE"]])
   data.table::set(master, i = index, j = paste0(trait, ".NEF"), value = incoming[["NEF"]])
-  list(master = master, allele_flips = sum(flipped), new_snps = new_snps)
+  list(
+    master = master,
+    allele_flips = sum(flipped),
+    new_snps = new_snps,
+    exact_matches = exact_matches,
+    swapped_matches = swapped_matches,
+    incompatible_matches = incompatible_matches
+  )
 }
 
 build_manifest_fastasset_input <- function(manifest, params, output_file,
@@ -301,6 +314,13 @@ build_manifest_fastasset_input <- function(manifest, params, output_file,
     master <- appended$master
     trait_input$audit[["allele_flips_to_reference"]] <- appended$allele_flips
     trait_input$audit[["new_union_snps"]] <- appended$new_snps
+    trait_input$audit[["reference_established_snps"]] <- appended$new_snps
+    trait_input$audit[["exact_allele_matches_to_reference"]] <-
+      appended$exact_matches
+    trait_input$audit[["swapped_allele_matches_to_reference"]] <-
+      appended$swapped_matches
+    trait_input$audit[["incompatible_allele_matches"]] <-
+      appended$incompatible_matches
     audit_rows[[row]] <- trait_input$audit
     if (row == 1L || row == nrow(manifest) || row %% 10L == 0L) {
       message(
@@ -311,6 +331,13 @@ build_manifest_fastasset_input <- function(manifest, params, output_file,
   }
   if (is.null(master) || nrow(master) == 0L) {
     stop("No SNP rows were available for FastASSET input construction.")
+  }
+
+  final_union_snps <- nrow(master)
+  for (row in seq_along(audit_rows)) {
+    audit_rows[[row]][["final_union_snps"]] <- final_union_snps
+    audit_rows[[row]][["snps_absent_from_trait"]] <-
+      final_union_snps - audit_rows[[row]][["input_rows"]]
   }
 
   data.table::setorder(master, ID)
@@ -342,7 +369,7 @@ manifest_input_signature <- function(params, manifest) {
     )
   }
   make_text_signature(c(
-    "manifest_input_version=2026-08-15-v2-median-prevalence",
+    "manifest_input_version=2026-08-15-v3-indexed-allele-audit",
     paste0("traits=", paste(manifest[["trait"]], collapse = ";")),
     paste0("source_format=", paste(manifest[["source_format"]], collapse = ";")),
     paste0("vcf_sample=", paste(manifest[["vcf_sample"]], collapse = ";")),

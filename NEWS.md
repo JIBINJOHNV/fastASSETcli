@@ -1,3 +1,15 @@
+# fastASSETcli 0.4.2
+
+- Retained the efficient single SNP-ID index plus exact/swapped allele
+  comparison used to construct the FastASSET wide table; no repeated physical
+  merges are performed.
+- Expanded `fastasset_input_build_audit.tsv` with exact matches, swapped
+  matches, reference-establishing SNPs, final union size, SNPs absent from each
+  trait, and incompatible-match counts. Incompatible pairs remain fatal.
+- Added regression coverage for exact matches, sign-corrected swapped matches,
+  missing union SNPs, and rejection of strand-complement/incompatible pairs.
+- Updated the input-preparation cache signature for the expanded audit.
+
 # fastASSETcli 0.4.1
 
 - Binary VCF LDSC continues to use per-SNP total sample size

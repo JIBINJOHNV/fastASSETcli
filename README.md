@@ -1,7 +1,7 @@
 # Installable fastASSET CLI package
 
 This repository installs the reviewed pipeline as the R package `fastASSETcli` and
-provides the shell command `fastasset`. Version 0.4.1 uses one per-trait
+provides the shell command `fastasset`. Version 0.4.2 uses one per-trait
 summary-statistic manifest as the complete analysis input. It can either load an
 existing GenomicSEM LDSC object or generate the object automatically from
 tabular or GWAS-VCF summary statistics before running FastASSET. The multi-trait
@@ -175,6 +175,14 @@ The signature includes the trait order, summary-statistic metadata, reference
 metadata, prevalence values, and LDSC/munging settings. A completed matching
 object is reused; incompatible or incomplete outputs are not silently reused.
 
+FastASSET input construction creates the SNP-ID union once and fills it by
+indexed matching; it does not repeatedly merge the growing wide table. The
+build audit reports, for every trait, exact allele matches, swapped matches and
+BETA flips, SNPs that establish a new reference orientation, SNPs absent from
+that trait after forming the final union, and incompatible matches. A completed
+run always has zero incompatible matches because any incompatible allele pair
+stops input construction immediately.
+
 Important for 200–250 traits: current GenomicSEM automatically increases the
 jackknife blocks above 18 traits to
 `((number_of_traits + 1) * (number_of_traits + 2) / 2) + 1`. Munging uses
@@ -189,7 +197,7 @@ installed normally:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.4.1.tar.gz
+R CMD INSTALL release/fastASSETcli_0.4.2.tar.gz
 ```
 
 The executable inside an installed package can be located with:
@@ -223,7 +231,7 @@ The detailed supplied-code comparison is installed with the package under
 
 ## Release archive
 
-`release/fastASSETcli_0.4.1.tar.gz` is the current installable source-package
+`release/fastASSETcli_0.4.2.tar.gz` is the current installable source-package
 archive. Earlier archives remain available for reproducibility. The editable
 package source remains at the repository root; an archive is not a substitute
 for version-controlled source code.

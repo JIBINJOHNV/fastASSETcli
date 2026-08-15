@@ -122,6 +122,7 @@ test_that("manifest tables construct wide input and align swapped effects", {
     c(
       "ID\tEA\tNEA\tBETA\tSE\tNEF",
       "rs1\tG\tA\t0.3\t0.06\t200",
+      "rs2\tC\tT\t-0.2\t0.05\t190",
       "rs3\tA\tC\t0.4\t0.07\t180"
     ),
     file_b
@@ -155,14 +156,35 @@ test_that("manifest tables construct wide input and align swapped effects", {
     )
   )
   expect_equal(wide[["trait_b.Beta"]][wide[["ID"]] == "rs1"], -0.3)
-  expect_true(is.na(wide[["trait_b.Beta"]][wide[["ID"]] == "rs2"]))
+  expect_equal(wide[["trait_b.Beta"]][wide[["ID"]] == "rs2"], -0.2)
+  expect_true(is.na(wide[["trait_a.Beta"]][wide[["ID"]] == "rs3"]))
   expect_equal(wide[["trait_b.NEF"]][wide[["ID"]] == "rs3"], 180)
   audit_table <- data.table::fread(audit)
-  expect_equal(
-    audit_table[["allele_flips_to_reference"]][
-      audit_table[["trait"]] == "trait_b"
-    ],
-    1
+  trait_a_audit <- audit_table[audit_table[["trait"]] == "trait_a"]
+  trait_b_audit <- audit_table[audit_table[["trait"]] == "trait_b"]
+  expect_equal(trait_a_audit[["reference_established_snps"]], 2)
+  expect_equal(trait_a_audit[["snps_absent_from_trait"]], 1)
+  expect_equal(trait_b_audit[["exact_allele_matches_to_reference"]], 1)
+  expect_equal(trait_b_audit[["swapped_allele_matches_to_reference"]], 1)
+  expect_equal(trait_b_audit[["allele_flips_to_reference"]], 1)
+  expect_equal(trait_b_audit[["reference_established_snps"]], 1)
+  expect_equal(trait_b_audit[["snps_absent_from_trait"]], 0)
+  expect_equal(trait_b_audit[["incompatible_allele_matches"]], 0)
+})
+
+test_that("indexed allele alignment rejects incompatible pairs", {
+  reference <- data.table::data.table(
+    ID = "rs1", A1 = "A", A2 = "G", Beta = 0.2, SE = 0.05, NEF = 100
+  )
+  master <- fastASSETcli:::append_fastasset_trait(
+    NULL, reference, "trait_a"
+  )$master
+  incompatible <- data.table::data.table(
+    ID = "rs1", A1 = "T", A2 = "C", Beta = 0.3, SE = 0.06, NEF = 200
+  )
+  expect_error(
+    fastASSETcli:::append_fastasset_trait(master, incompatible, "trait_b"),
+    "Alleles are incompatible"
   )
 })
 
