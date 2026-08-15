@@ -154,10 +154,16 @@ test_that("manifest tables construct wide input and align swapped effects", {
       "trait_b.Beta", "trait_b.SE", "trait_b.NEF"
     )
   )
-  expect_equal(wide[ID == "rs1", trait_b.Beta], -0.3)
-  expect_true(is.na(wide[ID == "rs2", trait_b.Beta]))
-  expect_equal(wide[ID == "rs3", trait_b.NEF], 180)
-  expect_equal(data.table::fread(audit)[trait == "trait_b", allele_flips_to_reference], 1)
+  expect_equal(wide[["trait_b.Beta"]][wide[["ID"]] == "rs1"], -0.3)
+  expect_true(is.na(wide[["trait_b.Beta"]][wide[["ID"]] == "rs2"]))
+  expect_equal(wide[["trait_b.NEF"]][wide[["ID"]] == "rs3"], 180)
+  audit_table <- data.table::fread(audit)
+  expect_equal(
+    audit_table[["allele_flips_to_reference"]][
+      audit_table[["trait"]] == "trait_b"
+    ],
+    1
+  )
 })
 
 test_that("binary FastASSET Neff follows the original reference definition", {
