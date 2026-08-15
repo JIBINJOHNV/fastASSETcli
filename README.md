@@ -1,7 +1,7 @@
 # Installable fastASSET CLI package
 
 This repository installs the reviewed pipeline as the R package `fastASSETcli` and
-provides the shell command `fastasset`. Version 0.4.0 uses one per-trait
+provides the shell command `fastasset`. Version 0.4.1 uses one per-trait
 summary-statistic manifest as the complete analysis input. It can either load an
 existing GenomicSEM LDSC object or generate the object automatically from
 tabular or GWAS-VCF summary statistics before running FastASSET. The multi-trait
@@ -104,7 +104,7 @@ sample ID. VCF conversion applies these audited rules:
 
 | Input situation | LDSC sample size | Prevalence handling |
 |---|---|---|
-| `POPULATION_PREV` supplied | Per-SNP `N = FORMAT/NC + FORMAT/NCO` | Binary trait; `SAMPLE_PREV` is calculated as `NC/(NC+NCO)` using the unambiguous maximum-total-sample row. Header `TotalCases`/`TotalControls` takes priority when present. |
+| `POPULATION_PREV` supplied | Per-SNP total sample size `N = FORMAT/NC + FORMAT/NCO` | Binary trait; one LDSC `SAMPLE_PREV` is calculated as `median(NC)/(median(NC)+median(NCO))` across valid SNP rows. Header totals are provenance only. |
 | `POPULATION_PREV` is `NA` | Per-SNP `N = FORMAT/NEF` | Quantitative trait; both prevalences remain `NA`. Here `NEF` is used directly as total analyzed sample size. |
 
 The supplied GWAS-VCF convention is handled explicitly: `BETA=FORMAT/ES`,
@@ -189,7 +189,7 @@ installed normally:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.4.0.tar.gz
+R CMD INSTALL release/fastASSETcli_0.4.1.tar.gz
 ```
 
 The executable inside an installed package can be located with:
@@ -206,8 +206,9 @@ Rscript -e 'cat(system.file("exec", "fastasset", package="fastASSETcli"))'
 - Binary fastASSET `Neff` is calculated as
   `NCASE*NCONTROL/(NCASE+NCONTROL)`, matching the upstream reference.
 - Automatic LDSC accepts tabular or GWAS-VCF manifest files; VCF binary
-  prevalence and sample size are derived from `NC/NCO`, while quantitative VCF
-  `NEF` is used directly.
+  per-SNP total sample size is `NC+NCO`, and its trait-level sample prevalence
+  is `median(NC)/(median(NC)+median(NCO))`. Quantitative VCF `NEF` is used
+  directly as total sample size.
 - GenomicSEM `$I` is loaded from an existing object or generated and saved as a
   separate `.RData` file.
 - Trait names are recovered from `I`, `S`, or `S_Stand` and reordered to the
@@ -222,7 +223,7 @@ The detailed supplied-code comparison is installed with the package under
 
 ## Release archive
 
-`release/fastASSETcli_0.4.0.tar.gz` is the current installable source-package
+`release/fastASSETcli_0.4.1.tar.gz` is the current installable source-package
 archive. Earlier archives remain available for reproducibility. The editable
 package source remains at the repository root; an archive is not a substitute
 for version-controlled source code.

@@ -270,6 +270,45 @@ test_that("VCF conversion applies allele, P, N and prevalence rules", {
   expect_equal(quantitative$table$N, query$NEF)
 })
 
+test_that("binary VCF prevalence uses separate NC and NCO medians", {
+  query <- data.table::data.table(
+    CHR = c("1", "1", "1"),
+    POS = c(100, 200, 300),
+    SNP = c("rs1", "rs2", "rs3"),
+    REF = c("A", "C", "G"),
+    ALT = c("G", "T", "A"),
+    ES = c(0.2, -0.1, 0.3),
+    SE = c(0.05, 0.04, 0.06),
+    LP = c(2, 1, 3),
+    AF = c(0.2, 0.3, 0.4),
+    NC = c(10, 20, 100),
+    NCO = c(90, 80, 900),
+    SS = c(100, 100, 1000)
+  )
+  binary <- fastASSETcli:::standardize_vcf_query_table(
+    query,
+    binary = TRUE,
+    supplied_sample_prev = NA_real_,
+    source_file = "binary.vcf"
+  )
+
+  expect_equal(binary$median_cases, 20)
+  expect_equal(binary$median_controls, 90)
+  expect_equal(binary$sample_prev, 20 / 110)
+  expect_equal(binary$table$N, query$NC + query$NCO)
+  expect_match(binary$sample_prev_source, "median\\(FORMAT/NC\\)")
+
+  expect_error(
+    fastASSETcli:::standardize_vcf_query_table(
+      query,
+      binary = TRUE,
+      supplied_sample_prev = 0.1,
+      source_file = "binary.vcf"
+    ),
+    "does not match the value derived from median VCF NC/NCO"
+  )
+})
+
 test_that("bcftools creates an audited LDSC table from GWAS-VCF", {
   bcftools <- unname(Sys.which("bcftools"))
   skip_if(!nzchar(bcftools), "bcftools is not installed")
@@ -291,7 +330,7 @@ test_that("bcftools creates an audited LDSC table from GWAS-VCF", {
       "##FORMAT=<ID=NEF,Number=A,Type=Integer,Description=\"Effective N\">",
       paste0(
         "##SAMPLE=<ID=trait_one,StudyType=CaseControl,",
-        "TotalCases=100,TotalControls=900>"
+        "TotalCases=500,TotalControls=500>"
       ),
       "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\ttrait_one",
       paste0(
@@ -316,12 +355,18 @@ test_that("bcftools creates an audited LDSC table from GWAS-VCF", {
   )
   converted <- data.table::fread(output)
   expect_equal(result$sample_prev, 0.1)
+  expect_match(result$sample_prev_source, "median\\(FORMAT/NC\\)")
   expect_identical(result$sample, "trait_one")
   expect_equal(converted$P, 0.01)
   expect_equal(converted$N, 1000)
   expect_identical(converted$A1, "G")
   expect_identical(converted$A2, "A")
   expect_true(file.exists(metadata))
+  conversion_metadata <- fastASSETcli:::read_conversion_metadata(metadata)
+  expect_equal(conversion_metadata$median_cases, "100")
+  expect_equal(conversion_metadata$median_controls, "900")
+  expect_equal(conversion_metadata$header_total_cases, "500")
+  expect_equal(conversion_metadata$header_total_controls, "500")
 
   manifest_row <- data.table::data.table(
     order = 1L, trait = "trait_one", source_file = vcf,

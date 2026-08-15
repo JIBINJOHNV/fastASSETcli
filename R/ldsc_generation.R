@@ -373,48 +373,33 @@ coerce_vcf_numeric_columns <- function(table, columns, file) {
 }
 
 derive_binary_sample_prevalence <- function(table, supplied_sample_prev,
-                                             header_cases, header_controls,
                                              file) {
-  if (is.finite(header_cases) && is.finite(header_controls)) {
-    cases <- header_cases
-    controls <- header_controls
-    source <- "VCF ##SAMPLE TotalCases/TotalControls"
-  } else {
-    total <- table[["NC"]] + table[["NCO"]]
-    maximum <- max(total)
-    maximum_rows <- total == maximum
-    pairs <- unique(table[maximum_rows, c("NC", "NCO"), with = FALSE])
-    if (nrow(pairs) != 1L) {
-      stop(
-        "Cannot derive one unambiguous SAMPLE_PREV from VCF NC/NCO at the ",
-        "maximum total sample size in ", file, "."
-      )
-    }
-    cases <- pairs[["NC"]][1L]
-    controls <- pairs[["NCO"]][1L]
-    source <- "FORMAT/NC and FORMAT/NCO at maximum NC+NCO"
-  }
-  derived <- cases / (cases + controls)
-  tolerance <- max(1e-6, 0.5 / (cases + controls))
+  median_cases <- stats::median(table[["NC"]])
+  median_controls <- stats::median(table[["NCO"]])
+  derived <- median_cases / (median_cases + median_controls)
+  source <- paste0(
+    "median(FORMAT/NC)/(median(FORMAT/NC)+median(FORMAT/NCO)) ",
+    "across valid SNP rows"
+  )
+  tolerance <- max(1e-6, 0.5 / (median_cases + median_controls))
   if (!is.na(supplied_sample_prev) &&
       abs(supplied_sample_prev - derived) > tolerance) {
     stop(
-      "Manifest SAMPLE_PREV does not match the value derived from VCF NC/NCO ",
+      "Manifest SAMPLE_PREV does not match the value derived from median ",
+      "VCF NC/NCO ",
       "for ", file, ": supplied=", format(supplied_sample_prev, digits = 12),
       ", derived=", format(derived, digits = 12), "."
     )
   }
   list(
     sample_prev = derived,
-    cases = cases,
-    controls = controls,
+    median_cases = median_cases,
+    median_controls = median_controls,
     source = source
   )
 }
 
 standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
-                                        header_cases = NA_real_,
-                                        header_controls = NA_real_,
                                         has_info = FALSE,
                                         source_file = "VCF") {
   numeric_columns <- c("POS", "ES", "SE", "LP", "AF")
@@ -470,11 +455,12 @@ standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
 
   prevalence <- if (binary) {
     derive_binary_sample_prevalence(
-      table, supplied_sample_prev, header_cases, header_controls, source_file
+      table, supplied_sample_prev, source_file
     )
   } else {
     list(
-      sample_prev = NA_real_, cases = NA_real_, controls = NA_real_,
+      sample_prev = NA_real_, median_cases = NA_real_,
+      median_controls = NA_real_,
       source = "not applicable (quantitative)"
     )
   }
@@ -520,8 +506,8 @@ standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
     table = output,
     sample_prev = prevalence$sample_prev,
     sample_prev_source = prevalence$source,
-    cases = prevalence$cases,
-    controls = prevalence$controls,
+    median_cases = prevalence$median_cases,
+    median_controls = prevalence$median_controls,
     input_rows = input_rows,
     output_rows = nrow(output),
     dropped_rows = input_rows - nrow(output),
@@ -570,7 +556,8 @@ prepare_one_vcf_summary <- function(source_file, requested_sample,
                                     output_file, metadata_file, bcftools,
                                     bcftools_version) {
   required_metadata <- c(
-    "sample", "study_type", "sample_prev", "sample_prev_source", "has_info"
+    "sample", "study_type", "sample_prev", "sample_prev_source",
+    "prevalence_method", "has_info"
   )
   if (file.exists(output_file) && file.exists(metadata_file)) {
     metadata <- read_conversion_metadata(metadata_file)
@@ -712,8 +699,6 @@ prepare_one_vcf_summary <- function(source_file, requested_sample,
     query,
     binary = binary,
     supplied_sample_prev = supplied_sample_prev,
-    header_cases = header_cases,
-    header_controls = header_controls,
     has_info = has_info,
     source_file = source_file
   )
@@ -728,8 +713,15 @@ prepare_one_vcf_summary <- function(source_file, requested_sample,
       population_prev = if (binary) population_prev else NA_real_,
       sample_prev = standardized$sample_prev,
       sample_prev_source = standardized$sample_prev_source,
-      maximum_cases = standardized$cases,
-      maximum_controls = standardized$controls,
+      prevalence_method = if (binary) {
+        "ratio of separate per-SNP NC and NCO medians"
+      } else {
+        "not applicable"
+      },
+      median_cases = standardized$median_cases,
+      median_controls = standardized$median_controls,
+      header_total_cases = header_cases,
+      header_total_controls = header_controls,
       has_info = has_info,
       input_rows = standardized$input_rows,
       output_rows = standardized$output_rows,
@@ -921,7 +913,7 @@ make_ldsc_generation_signature <- function(params, manifest, reference_files) {
     )
   }
   values <- c(
-    "ldsc_generation_version=2026-08-15-v2-vcf",
+    "ldsc_generation_version=2026-08-15-v3-median-prevalence",
     paste0("traits=", paste(manifest$trait, collapse = ";")),
     paste0("source_format=", paste(manifest$source_format, collapse = ";")),
     paste0("vcf_sample=", paste(manifest$vcf_sample, collapse = ";")),

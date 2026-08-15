@@ -342,7 +342,7 @@ manifest_input_signature <- function(params, manifest) {
     )
   }
   make_text_signature(c(
-    "manifest_input_version=2026-08-15-v1-single-manifest",
+    "manifest_input_version=2026-08-15-v2-median-prevalence",
     paste0("traits=", paste(manifest[["trait"]], collapse = ";")),
     paste0("source_format=", paste(manifest[["source_format"]], collapse = ";")),
     paste0("vcf_sample=", paste(manifest[["vcf_sample"]], collapse = ";")),

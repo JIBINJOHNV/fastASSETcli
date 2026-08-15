@@ -19,7 +19,8 @@ object or generate and save one from a validated per-trait summary-statistic
 manifest before running FastASSET. The manifest is the only summary-statistic
 input and its row order defines the trait order; the wide FastASSET table is
 constructed internally. Manifest files may be tabular or GWAS-VCF;
-VCF conversion uses bcftools, converts LP to raw P, derives case-control sample
-prevalence from NC/NCO when population prevalence is supplied, and uses NEF
-directly as total sample size for quantitative traits.
+VCF conversion uses bcftools, converts LP to raw P, uses per-SNP NC+NCO as the
+case-control total sample size, derives one sample prevalence as
+median(NC)/(median(NC)+median(NCO)) when population prevalence is supplied,
+and uses NEF directly as total sample size for quantitative traits.
 }

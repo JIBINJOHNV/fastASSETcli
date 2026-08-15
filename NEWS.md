@@ -1,3 +1,14 @@
+# fastASSETcli 0.4.1
+
+- Binary VCF LDSC continues to use per-SNP total sample size
+  `N=NC+NCO`, paired with one trait-level sample prevalence calculated as
+  `median(NC)/(median(NC)+median(NCO))` across valid SNP rows.
+- Binary FastASSET continues to use the original per-SNP definition
+  `NC*NCO/(NC+NCO)`. VCF `NEF` is not substituted for either binary rule.
+- VCF header `TotalCases` and `TotalControls` are retained as provenance but
+  no longer determine binary LDSC sample prevalence.
+- Updated conversion provenance and cache signatures for the prevalence rule.
+
 # fastASSETcli 0.4.0
 
 - Removed the public `--fastasset-input` option. The per-trait
