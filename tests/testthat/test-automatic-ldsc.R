@@ -160,16 +160,20 @@ test_that("manifest tables construct wide input and align swapped effects", {
   expect_true(is.na(wide[["trait_a.Beta"]][wide[["ID"]] == "rs3"]))
   expect_equal(wide[["trait_b.NEF"]][wide[["ID"]] == "rs3"], 180)
   audit_table <- data.table::fread(audit)
-  trait_a_audit <- audit_table[audit_table[["trait"]] == "trait_a"]
-  trait_b_audit <- audit_table[audit_table[["trait"]] == "trait_b"]
-  expect_equal(trait_a_audit[["reference_established_snps"]], 2)
-  expect_equal(trait_a_audit[["snps_absent_from_trait"]], 1)
-  expect_equal(trait_b_audit[["exact_allele_matches_to_reference"]], 1)
-  expect_equal(trait_b_audit[["swapped_allele_matches_to_reference"]], 1)
-  expect_equal(trait_b_audit[["allele_flips_to_reference"]], 1)
-  expect_equal(trait_b_audit[["reference_established_snps"]], 1)
-  expect_equal(trait_b_audit[["snps_absent_from_trait"]], 0)
-  expect_equal(trait_b_audit[["incompatible_allele_matches"]], 0)
+  trait_a_row <- which(audit_table[["trait"]] == "trait_a")
+  trait_b_row <- which(audit_table[["trait"]] == "trait_b")
+  expect_equal(audit_table[["reference_established_snps"]][trait_a_row], 2)
+  expect_equal(audit_table[["snps_absent_from_trait"]][trait_a_row], 1)
+  expect_equal(
+    audit_table[["exact_allele_matches_to_reference"]][trait_b_row], 1
+  )
+  expect_equal(
+    audit_table[["swapped_allele_matches_to_reference"]][trait_b_row], 1
+  )
+  expect_equal(audit_table[["allele_flips_to_reference"]][trait_b_row], 1)
+  expect_equal(audit_table[["reference_established_snps"]][trait_b_row], 1)
+  expect_equal(audit_table[["snps_absent_from_trait"]][trait_b_row], 0)
+  expect_equal(audit_table[["incompatible_allele_matches"]][trait_b_row], 0)
 })
 
 test_that("indexed allele alignment rejects incompatible pairs", {
