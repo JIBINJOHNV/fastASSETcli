@@ -178,12 +178,11 @@ read_ldsc_manifest <- function(path, analysis_traits) {
     sample_prev = sample_prev,
     population_prev = population_prev
   )
-  resolved <- resolved[match(analysis_traits, resolved$trait)]
-  if (length(resolved$trait) != length(analysis_traits) ||
-      !all(as.character(resolved$trait) == analysis_traits)) {
+  resolved[["order"]] <- match(resolved[["trait"]], analysis_traits)
+  if (anyNA(resolved[["order"]])) {
     stop("Internal error while reordering the LDSC manifest.")
   }
-  resolved[, order := seq_len(.N)]
+  data.table::setorder(resolved, order)
   data.table::setcolorder(
     resolved,
     c("order", "trait", "file", "N", "sample_prev", "population_prev")
