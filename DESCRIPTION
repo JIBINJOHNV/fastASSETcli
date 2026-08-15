@@ -1,0 +1,27 @@
+Package: fastASSETcli
+Type: Package
+Title: Reference-Aligned FastASSET Command-Line Pipeline
+Version: 0.1.0
+Authors@R: person("Jibin", "John", role = c("aut", "cre"),
+    email = "69025183+JIBINJOHNV@users.noreply.github.com")
+Description: Runs a reference-aligned fastASSET workflow for large collections
+    of quantitative traits. The package loads a separately saved GenomicSEM
+    LDSC object, restores and audits trait labels, reorders the intercept
+    covariance matrix, normalizes it to a trait correlation matrix, performs
+    directional fastASSET subset testing, writes the ASSET fixed-effect Meta
+    component, and records severity-ranked quality control.
+License: file LICENSE
+Encoding: UTF-8
+LazyData: false
+Depends: R (>= 4.1.0)
+Imports:
+    ASSET,
+    data.table,
+    parallel,
+    stats,
+    tools,
+    utils
+URL: https://github.com/JIBINJOHNV/fastASSETcli,
+    https://github.com/gqi/fastASSET
+BugReports: https://github.com/JIBINJOHNV/fastASSETcli/issues
+SystemRequirements: gzip; fork-based parallelism requires Linux or macOS

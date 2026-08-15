@@ -1,0 +1,8 @@
+This local research package contains an adapted workflow based on fastASSET and
+calls the separately installed ASSET package. Use and redistribution remain
+subject to the licenses and terms of those upstream projects:
+
+https://github.com/gqi/fastASSET
+https://github.com/sbstatgen/ASSET
+
+No additional warranty is provided with this workflow.

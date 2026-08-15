@@ -1,0 +1,7 @@
+^\.git$
+^\.github$
+^\.gitignore$
+^install\.sh$
+^tools$
+^release$
+^CITATION\.cff$

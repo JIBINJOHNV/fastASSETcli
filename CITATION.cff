@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this workflow, cite fastASSET, ASSET, and this software."
+title: "fastASSETcli"
+type: software
+version: 0.1.0
+authors:
+  - family-names: "John"
+    given-names: "Jibin"
+repository-code: "https://github.com/JIBINJOHNV/fastASSETcli"
+url: "https://github.com/JIBINJOHNV/fastASSETcli"
+date-released: 2026-08-15
+references:
+  - type: software
+    title: "fastASSET"
+    repository-code: "https://github.com/gqi/fastASSET"
+  - type: software
+    title: "ASSET"
+    repository-code: "https://github.com/sbstatgen/ASSET"
