@@ -50,8 +50,11 @@ coerce_summary_numeric <- function(values, label, file) {
 }
 
 read_manifest_trait_for_fastasset <- function(manifest_row, params) {
-  file <- manifest_row[["file"]][1L]
-  trait <- manifest_row[["trait"]][1L]
+  file <- as.character(manifest_row[["file"]][1L])
+  trait <- as.character(manifest_row[["trait"]][1L])
+  if (length(file) != 1L || is.na(file) || !nzchar(file)) {
+    stop("Internal error: the resolved manifest row has no prepared FILE value.")
+  }
   binary <- !is.na(manifest_row[["population_prev"]][1L])
   source_format <- manifest_row[["source_format"]][1L]
   header <- names(data.table::fread(
@@ -290,7 +293,8 @@ build_manifest_fastasset_input <- function(manifest, params, output_file,
   master <- NULL
   audit_rows <- vector("list", nrow(manifest))
   for (row in seq_len(nrow(manifest))) {
-    trait_input <- read_manifest_trait_for_fastasset(manifest[row], params)
+    manifest_row <- lapply(manifest, function(column) column[row])
+    trait_input <- read_manifest_trait_for_fastasset(manifest_row, params)
     appended <- append_fastasset_trait(
       master, trait_input$table, manifest[["trait"]][row]
     )
