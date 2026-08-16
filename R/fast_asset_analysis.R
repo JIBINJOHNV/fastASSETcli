@@ -76,10 +76,10 @@ extract_genomicsem_ldsc <- function(path, object_name, analysis_traits) {
       )
     }
     intercept <- as.matrix(object$I)
+    # GenomicSEM::ldsc() constructs I and S in the same trait order, but
+    # normally places trait.names only on S.  Therefore S column names are the
+    # canonical label source for an unmodified GenomicSEM LDSC object.
     candidate_sources <- list(
-      I_matching_dimnames = if (
-        identical(rownames(intercept), colnames(intercept))
-      ) colnames(intercept) else NULL,
       S_colnames = if (!is.null(object$S)) colnames(object$S) else NULL,
       S_rownames = if (!is.null(object$S)) rownames(object$S) else NULL,
       S_Stand_colnames = if (!is.null(object$S_Stand)) {
@@ -88,6 +88,9 @@ extract_genomicsem_ldsc <- function(path, object_name, analysis_traits) {
       S_Stand_rownames = if (!is.null(object$S_Stand)) {
         rownames(object$S_Stand)
       } else NULL,
+      I_matching_dimnames = if (
+        identical(rownames(intercept), colnames(intercept))
+      ) colnames(intercept) else NULL,
       I_colnames = colnames(intercept),
       I_rownames = rownames(intercept)
     )
@@ -104,64 +107,104 @@ extract_genomicsem_ldsc <- function(path, object_name, analysis_traits) {
     logical(1L),
     expected_length = matrix_size
   )]
-  matching_candidates <- valid_candidates[vapply(
-    valid_candidates,
-    function(labels) all(analysis_traits %in% labels),
-    logical(1L)
-  )]
-
-  if (length(matching_candidates) == 0L) {
-    available <- if (length(valid_candidates) > 0L) {
-      unique(unlist(valid_candidates, use.names = FALSE))
-    } else {
-      character()
-    }
-    missing_traits <- setdiff(analysis_traits, available)
+  if (length(valid_candidates) == 0L) {
     stop(
-      "Could not map the fastASSET traits to GenomicSEM I. Missing trait(s): ",
-      paste(missing_traits, collapse = ", "),
-      ". Checked I, S and S_Stand dimnames."
+      "Could not recover unique trait names for GenomicSEM I. Checked I, S ",
+      "and S_Stand dimnames."
     )
   }
 
-  name_source <- names(matching_candidates)[1L]
-  ldsc_traits <- as.character(matching_candidates[[1L]])
+  # Candidate sources are ordered by authority.  For a native GenomicSEM
+  # object, S_colnames is used even if another object's fallback names would
+  # happen to overlap more manifest labels: I and S share one native order.
+  name_source <- names(valid_candidates)[1L]
+  ldsc_traits <- as.character(valid_candidates[[1L]])
   rownames(intercept) <- colnames(intercept) <- ldsc_traits
 
-  missing_traits <- setdiff(analysis_traits, ldsc_traits)
-  if (length(missing_traits) > 0L) {
-    stop(
-      "Traits missing from GenomicSEM LDSC output: ",
-      paste(missing_traits, collapse = ", ")
+  missing_from_ldsc <- setdiff(analysis_traits, ldsc_traits)
+  missing_from_manifest <- setdiff(ldsc_traits, analysis_traits)
+  common_traits <- analysis_traits[analysis_traits %in% ldsc_traits]
+
+  if (length(missing_from_ldsc) > 0L) {
+    warning(
+      "Manifest trait(s) missing from LDSC and excluded: ",
+      paste(missing_from_ldsc, collapse = ", "),
+      call. = FALSE
     )
   }
+  if (length(missing_from_manifest) > 0L) {
+    warning(
+      "LDSC trait(s) missing from the manifest and excluded: ",
+      paste(missing_from_manifest, collapse = ", "),
+      call. = FALSE
+    )
+  }
+  if (length(common_traits) < 2L) {
+    stop(
+      "Fewer than two common traits remain between the manifest and LDSC ",
+      "object."
+    )
+  }
+
+  manifest_audit <- data.table::data.table(
+    trait = analysis_traits,
+    manifest_order = seq_along(analysis_traits),
+    ldsc_order = match(analysis_traits, ldsc_traits),
+    status = ifelse(
+      analysis_traits %in% ldsc_traits, "COMMON", "MISSING_FROM_LDSC"
+    ),
+    analysis_order = match(analysis_traits, common_traits),
+    action = ifelse(
+      analysis_traits %in% ldsc_traits,
+      "RETAINED_IN_MANIFEST_ORDER",
+      "MANIFEST_TRAIT_EXCLUDED"
+    )
+  )
+  ldsc_only_audit <- data.table::data.table(
+    trait = missing_from_manifest,
+    manifest_order = rep(NA_integer_, length(missing_from_manifest)),
+    ldsc_order = match(missing_from_manifest, ldsc_traits),
+    status = rep("MISSING_FROM_MANIFEST", length(missing_from_manifest)),
+    analysis_order = rep(NA_integer_, length(missing_from_manifest)),
+    action = rep("LDSC_TRAIT_EXCLUDED", length(missing_from_manifest))
+  )
+  trait_match_audit <- data.table::rbindlist(
+    list(manifest_audit, ldsc_only_audit),
+    use.names = TRUE,
+    fill = TRUE
+  )
 
   audit <- data.table::data.table(
     ldsc_original_order = seq_along(ldsc_traits),
     trait = ldsc_traits,
-    used_in_fastasset = ldsc_traits %in% analysis_traits,
-    fastasset_order = match(ldsc_traits, analysis_traits)
+    used_in_fastasset = ldsc_traits %in% common_traits,
+    fastasset_order = match(ldsc_traits, common_traits)
   )
   audit[, trait_name_source := name_source]
   audit[, ldsc_object_name := loaded_object_name]
 
-  reordered <- intercept[analysis_traits, analysis_traits, drop = FALSE]
-  stopifnot(identical(rownames(reordered), analysis_traits))
-  stopifnot(identical(colnames(reordered), analysis_traits))
+  reordered <- intercept[common_traits, common_traits, drop = FALSE]
+  stopifnot(identical(rownames(reordered), common_traits))
+  stopifnot(identical(colnames(reordered), common_traits))
 
   message(
     "Extracted GenomicSEM I from object '", loaded_object_name,
     "'; trait names from ", name_source, ". Reordered ",
-    length(analysis_traits), " traits to fastASSET input order."
+    length(common_traits), " common traits to manifest order."
   )
 
   list(
     intercept = reordered,
     order_audit = audit,
+    trait_match_audit = trait_match_audit,
+    common_traits = common_traits,
+    missing_from_ldsc = missing_from_ldsc,
+    missing_from_manifest = missing_from_manifest,
     object_name = loaded_object_name,
     trait_name_source = name_source,
     n_ldsc_traits = length(ldsc_traits),
-    n_analysis_traits = length(analysis_traits)
+    n_manifest_traits = length(analysis_traits),
+    n_analysis_traits = length(common_traits)
   )
 }
 
@@ -250,6 +293,21 @@ empty_qc_table <- function() {
   )
 }
 
+make_direction_limit_table <- function(qc_table, max_traits_per_direction,
+                                       scr_pthr) {
+  table <- data.table::copy(
+    qc_table[qc_table[["status"]] == "DIRECTION_LIMIT_EXCEEDED"]
+  )
+  table[["max_traits_per_direction"]] <- rep(
+    as.integer(max_traits_per_direction), nrow(table)
+  )
+  table[["scr_pthr"]] <- rep(as.numeric(scr_pthr), nrow(table))
+  table[["action"]] <- rep(
+    "SNP_SKIPPED_ASSET_SEARCH_ANALYSIS_CONTINUED", nrow(table)
+  )
+  table
+}
+
 make_critical_qc <- function(snp, input_traits, valid_traits, message) {
   qc <- make_fastasset_qc(
     snp = snp,
@@ -274,16 +332,23 @@ run_fastasset_chunk <- function(chunk_id, chunk_input_file, output_dir,
   meta_file <- file.path(
     output_dir, paste0("fastasset_chunk_", chunk_id, "_meta.tsv.gz")
   )
+  direction_limit_file <- file.path(
+    output_dir,
+    paste0("fastasset_chunk_", chunk_id, "_direction_limit.tsv.gz")
+  )
   done_file <- file.path(
     output_dir, paste0("fastasset_chunk_", chunk_id, ".done")
   )
 
   if (file.exists(done_file) && file.exists(result_file) && file.exists(qc_file) &&
-      file.exists(meta_file)) {
+      file.exists(meta_file) && file.exists(direction_limit_file)) {
     return(TRUE)
   }
 
-  unlink(c(result_file, qc_file, meta_file, done_file), force = TRUE)
+  unlink(
+    c(result_file, qc_file, meta_file, direction_limit_file, done_file),
+    force = TRUE
+  )
   chunk <- data.table::fread(chunk_input_file, check.names = FALSE)
 
   results <- vector("list", nrow(chunk))
@@ -379,6 +444,11 @@ run_fastasset_chunk <- function(chunk_id, chunk_input_file, output_dir,
   } else {
     empty_meta_table()
   }
+  direction_limit_table <- make_direction_limit_table(
+    qc_table,
+    max_traits_per_direction = params$max_numtraits_per_side,
+    scr_pthr = params$scr_pthr
+  )
 
   data.table::fwrite(qc_table, qc_file, sep = "\t", quote = FALSE, na = "NA")
   data.table::fwrite(
@@ -387,13 +457,21 @@ run_fastasset_chunk <- function(chunk_id, chunk_input_file, output_dir,
   data.table::fwrite(
     meta_table, meta_file, sep = "\t", quote = FALSE, na = "NA"
   )
+  data.table::fwrite(
+    direction_limit_table,
+    direction_limit_file,
+    sep = "\t",
+    quote = FALSE,
+    na = "NA"
+  )
   writeLines(
     c(
       "status=complete",
       paste0("chunk=", chunk_id),
       paste0("input_rows=", nrow(chunk)),
       paste0("result_rows=", nrow(result_table)),
-      paste0("meta_rows=", nrow(meta_table))
+      paste0("meta_rows=", nrow(meta_table)),
+      paste0("direction_limit_rows=", nrow(direction_limit_table))
     ),
     done_file
   )
@@ -519,6 +597,12 @@ run_fastasset_stage <- function(analysis_input, correlation, blocks,
     result_chunk_dir,
     paste0("fastasset_chunk_", seq_len(n_chunks), "_meta.tsv.gz")
   )
+  direction_limit_chunk_files <- file.path(
+    result_chunk_dir,
+    paste0(
+      "fastasset_chunk_", seq_len(n_chunks), "_direction_limit.tsv.gz"
+    )
+  )
 
   final_result_file <- file.path(
     output_dir, paste0(params$run_name, "_fastasset_results.tsv.gz")
@@ -529,10 +613,18 @@ run_fastasset_stage <- function(analysis_input, correlation, blocks,
   final_meta_file <- file.path(
     output_dir, paste0(params$run_name, "_fastasset_meta.tsv.gz")
   )
+  final_direction_limit_file <- file.path(
+    output_dir,
+    paste0(params$run_name, "_direction_limit_exceeded.tsv.gz")
+  )
 
   combine_tsv_gz(result_chunk_files, final_result_file)
   combine_tsv_gz(qc_chunk_files, final_qc_file)
   combine_tsv_gz(meta_chunk_files, final_meta_file)
+  combine_tsv_gz(
+    direction_limit_chunk_files,
+    final_direction_limit_file
+  )
 
   summary <- summarize_qc_files(qc_chunk_files)
   summary_file <- file.path(
@@ -549,7 +641,7 @@ run_fastasset_stage <- function(analysis_input, correlation, blocks,
     warning(
       high_count,
       " SNP row(s) exceeded the per-direction screening limit and were not tested. ",
-      "Review the QC file before interpreting genome-wide completeness."
+      "The analysis continued; review ", final_direction_limit_file, "."
     )
   }
 
@@ -557,6 +649,7 @@ run_fastasset_stage <- function(analysis_input, correlation, blocks,
     results = final_result_file,
     meta = final_meta_file,
     qc = final_qc_file,
+    direction_limit_exceeded = final_direction_limit_file,
     summary = summary_file,
     output_dir = output_dir,
     critical_count = critical_count,
@@ -574,7 +667,7 @@ run_fastasset_stage <- function(analysis_input, correlation, blocks,
     stop(
       high_count,
       " HIGH-severity direction-limit exclusion(s) were recorded. Outputs were ",
-      "written; inspect ", final_qc_file
+      "written; inspect ", final_direction_limit_file
     )
   }
 
@@ -584,7 +677,38 @@ run_fastasset_stage <- function(analysis_input, correlation, blocks,
 run_asset_pipeline <- function(params) {
   check_required_packages()
 
-  prepared_input <- prepare_manifest_analysis_input(params)
+  # In existing-LDSC mode, determine the common trait set before reading or
+  # converting summary statistics.  Manifest order remains canonical, and
+  # manifest rows (including VCF SAMPLE values) not represented in LDSC are
+  # excluded from all downstream preparation.
+  manifest_traits <- read_ldsc_manifest_trait_names(params$sumstats_manifest)
+  trait_match_file <- file.path(
+    params$output_dir,
+    paste0(params$run_name, "_manifest_ldsc_trait_match.tsv")
+  )
+  ldsc_extraction <- NULL
+  if (identical(params$ldsc_mode, "existing")) {
+    ldsc_extraction <- extract_genomicsem_ldsc(
+      path = params$ldsc_rdata,
+      object_name = params$ldsc_object_name,
+      analysis_traits = manifest_traits
+    )
+    data.table::fwrite(
+      ldsc_extraction$trait_match_audit,
+      trait_match_file,
+      sep = "\t",
+      quote = FALSE,
+      na = "NA"
+    )
+    manifest <- read_ldsc_manifest(
+      params$sumstats_manifest,
+      retain_traits = ldsc_extraction$common_traits
+    )
+  } else {
+    manifest <- read_ldsc_manifest(params$sumstats_manifest)
+  }
+
+  prepared_input <- prepare_manifest_analysis_input(params, manifest = manifest)
   params$analysis_input <- prepared_input$path
   params$input_preparation_dir <- prepared_input$preparation_dir
   params$input_preparation_signature <- prepared_input$signature
@@ -619,11 +743,29 @@ run_asset_pipeline <- function(params) {
   params$ldsc_generation_dir <- ldsc_source$generation_dir
   params$ldsc_generation_signature <- ldsc_source$signature
 
-  ldsc_extraction <- extract_genomicsem_ldsc(
-    path = params$ldsc_rdata,
-    object_name = params$ldsc_object_name,
-    analysis_traits = columns$traits
-  )
+  if (is.null(ldsc_extraction)) {
+    ldsc_extraction <- extract_genomicsem_ldsc(
+      path = params$ldsc_rdata,
+      object_name = params$ldsc_object_name,
+      analysis_traits = columns$traits
+    )
+    data.table::fwrite(
+      ldsc_extraction$trait_match_audit,
+      trait_match_file,
+      sep = "\t",
+      quote = FALSE,
+      na = "NA"
+    )
+  }
+  if (!identical(ldsc_extraction$common_traits, columns$traits)) {
+    stop(
+      "Internal trait-order mismatch after manifest/LDSC common-trait ",
+      "selection."
+    )
+  }
+
+  params$trait_match_file <- trait_match_file
+
   correlation <- normalize_ldsc_intercept(
     ldsc_extraction$intercept,
     traits = columns$traits,
@@ -650,6 +792,9 @@ run_asset_pipeline <- function(params) {
   ldsc_order_file <- file.path(
     analysis_dir, "ldsc_trait_order_audit.tsv"
   )
+  analysis_trait_match_file <- file.path(
+    analysis_dir, "manifest_ldsc_trait_match.tsv"
+  )
   reordered_intercept_table <- data.table::as.data.table(
     ldsc_extraction$intercept,
     keep.rownames = "trait"
@@ -663,6 +808,13 @@ run_asset_pipeline <- function(params) {
   data.table::fwrite(
     ldsc_extraction$order_audit,
     ldsc_order_file,
+    sep = "\t",
+    quote = FALSE,
+    na = "NA"
+  )
+  data.table::fwrite(
+    ldsc_extraction$trait_match_audit,
+    analysis_trait_match_file,
     sep = "\t",
     quote = FALSE,
     na = "NA"
@@ -684,9 +836,10 @@ run_asset_pipeline <- function(params) {
       "minimum_correlation_eigenvalue", "ldsc_mode", "ldsc_rdata",
       "ldsc_object_name", "ldsc_generation_dir",
       "ldsc_generation_signature", "ldsc_trait_name_source",
-      "number_ldsc_traits", "sumstats_manifest", "analysis_input",
+      "number_manifest_traits", "number_ldsc_traits",
+      "number_common_traits", "sumstats_manifest", "analysis_input",
       "input_preparation_dir", "input_preparation_signature",
-      "failed_alignment_file"
+      "failed_alignment_file", "manifest_ldsc_trait_match_file"
     ),
     value = as.character(c(
       signature, length(columns$traits), columns$sample_size_suffix,
@@ -696,10 +849,11 @@ run_asset_pipeline <- function(params) {
       attr(correlation, "minimum_eigenvalue"), params$ldsc_mode,
       params$ldsc_rdata, ldsc_extraction$object_name,
       params$ldsc_generation_dir, params$ldsc_generation_signature,
-      ldsc_extraction$trait_name_source, ldsc_extraction$n_ldsc_traits,
+      ldsc_extraction$trait_name_source, ldsc_extraction$n_manifest_traits,
+      ldsc_extraction$n_ldsc_traits, ldsc_extraction$n_analysis_traits,
       params$sumstats_manifest, params$analysis_input,
       params$input_preparation_dir, params$input_preparation_signature,
-      params$failed_alignment_file
+      params$failed_alignment_file, analysis_trait_match_file
     ))
   )
   data.table::fwrite(
@@ -721,6 +875,7 @@ run_asset_pipeline <- function(params) {
   outputs$analysis_input <- params$analysis_input
   outputs$input_preparation_dir <- params$input_preparation_dir
   outputs$failed_alignment_file <- params$failed_alignment_file
+  outputs$trait_match_file <- analysis_trait_match_file
 
   message("fastASSET analysis completed: ", analysis_dir)
   invisible(outputs)

@@ -531,3 +531,96 @@ test_that("generated LDSC matrices receive exact two-axis names", {
   expect_identical(rownames(named$S), c("trait_a", "trait_b"))
   expect_identical(colnames(named$S), c("trait_a", "trait_b"))
 })
+
+test_that("existing LDSC keeps common traits in manifest order", {
+  directory <- tempfile("ldsc_common_traits_")
+  dir.create(directory)
+  path <- file.path(directory, "ldsc.RData")
+
+  ldsc_traits <- c("trait_b", "trait_a", "ldsc_only")
+  intercept <- matrix(seq_len(9), nrow = 3L)
+  intercept <- (intercept + t(intercept)) / 2
+  covariance <- diag(3L)
+  colnames(covariance) <- ldsc_traits
+  LDSCoutput <- list(I = intercept, S = covariance)
+  save(LDSCoutput, file = path)
+
+  warnings <- character()
+  extracted <- withCallingHandlers(
+    fastASSETcli:::extract_genomicsem_ldsc(
+      path,
+      "LDSCoutput",
+      c("trait_a", "manifest_only", "trait_b")
+    ),
+    warning = function(condition) {
+      warnings <<- c(warnings, conditionMessage(condition))
+      invokeRestart("muffleWarning")
+    }
+  )
+
+  expect_identical(extracted$common_traits, c("trait_a", "trait_b"))
+  expect_identical(rownames(extracted$intercept), c("trait_a", "trait_b"))
+  expect_identical(colnames(extracted$intercept), c("trait_a", "trait_b"))
+  expect_equal(
+    unname(extracted$intercept),
+    unname(intercept[c(2L, 1L), c(2L, 1L), drop = FALSE])
+  )
+  expect_true(any(grepl("manifest_only", warnings, fixed = TRUE)))
+  expect_true(any(grepl("ldsc_only", warnings, fixed = TRUE)))
+  expect_identical(
+    extracted$trait_match_audit$status,
+    c("COMMON", "MISSING_FROM_LDSC", "COMMON", "MISSING_FROM_MANIFEST")
+  )
+
+  included_file_a <- file.path(directory, "included_a.tsv")
+  included_file_b <- file.path(directory, "included_b.tsv")
+  writeLines("SNP\tA1\tA2\tBETA\tSE\tN", included_file_a)
+  writeLines("SNP\tA1\tA2\tBETA\tSE\tN", included_file_b)
+  manifest_path <- file.path(directory, "manifest.tsv")
+  data.table::fwrite(
+    data.table::data.table(
+      TRAIT = c("trait_a", "manifest_only", "trait_b"),
+      FILE = c(
+        included_file_a,
+        file.path(directory, "missing.tsv"),
+        included_file_b
+      ),
+      SAMPLE = c(NA_character_, "excluded_sample", NA_character_)
+    ),
+    manifest_path,
+    sep = "\t",
+    na = "NA"
+  )
+  common_manifest <- fastASSETcli:::read_ldsc_manifest(
+    manifest_path, retain_traits = extracted$common_traits
+  )
+  expect_identical(common_manifest$trait, c("trait_a", "trait_b"))
+  expect_true(all(is.na(common_manifest$vcf_sample)))
+})
+
+test_that("direction-limit rows receive a dedicated continuation report", {
+  qc <- fastASSETcli:::empty_qc_table()
+  qc <- data.table::rbindlist(list(
+    qc,
+    data.table::data.table(
+      ID = c("rs_limit", "rs_pass"),
+      status = c("DIRECTION_LIMIT_EXCEEDED", "PASS"),
+      severity = c("HIGH", "OK"),
+      n_screened_positive = c(17L, 2L),
+      n_screened_negative = c(3L, 1L),
+      screened_positive_traits = c("a;b", "a;b"),
+      screened_negative_traits = c("c", "c"),
+      candidate_subsets_positive = c(131071, 3),
+      candidate_subsets_negative = c(7, 1)
+    )
+  ), use.names = TRUE, fill = TRUE)
+
+  report <- fastASSETcli:::make_direction_limit_table(qc, 16L, 0.05)
+  expect_identical(report$ID, "rs_limit")
+  expect_identical(report$max_traits_per_direction, 16L)
+  expect_equal(report$scr_pthr, 0.05)
+  expect_identical(
+    report$action,
+    "SNP_SKIPPED_ASSET_SEARCH_ANALYSIS_CONTINUED"
+  )
+})

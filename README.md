@@ -3,8 +3,9 @@
 `fastASSETcli` is an installable R package with a shell command for running a
 reference-aligned FastASSET analysis across many traits. One per-trait summary
 statistics manifest is the only analysis input. The package builds the internal
-wide FastASSET table, obtains the GenomicSEM LDSC intercept covariance, aligns
-trait order, runs directional FastASSET and writes auditable results and QC.
+wide FastASSET table, obtains the GenomicSEM LDSC intercept covariance, retains
+manifest/LDSC-common traits in manifest order, runs directional FastASSET and
+writes auditable results and structural validation records.
 
 The package can:
 
@@ -25,11 +26,14 @@ The package can:
 
 ```mermaid
 flowchart TD
-    A["Manifest: one row per trait"] --> B["Prepare and align summary statistics"]
-    B --> C["Load or generate GenomicSEM LDSC"]
-    C --> D["Normalize and reorder trait correlation"]
-    D --> E["Run directional FastASSET and Meta"]
-    E --> F["Results, QC, audits and provenance"]
+    A["Manifest: one row per trait"] --> B{"Existing LDSC?"}
+    B -->|"Yes"| C["Keep manifest/LDSC-common traits in manifest order"]
+    B -->|"No"| D["Prepare all manifest traits and generate LDSC"]
+    C --> E["Prepare and align retained summary statistics"]
+    D --> F["Normalize and reorder trait correlation"]
+    E --> F
+    F --> G["Run directional FastASSET and Meta"]
+    G --> H["Results, QC, audits and provenance"]
 ```
 
 The [complete workflow page](inst/docs/WORKFLOW.md) explains every processing
@@ -118,9 +122,10 @@ sample-size source. Nonstandard column names can be mapped through the CLI:
 
 ### Option A: Use an existing GenomicSEM LDSC object
 
-Use this mode when the complete trait set already has a saved GenomicSEM
-object containing `$I`. The object axes are recovered and reordered to the
-manifest order.
+Use this mode when the trait collection already has a saved GenomicSEM object
+containing `$I`. Trait names are taken from the native GenomicSEM `$S` order.
+Only traits common to the manifest and LDSC object are retained, in manifest
+order. Traits missing on either side are warned and written to a matching audit.
 
 ```bash
 fastasset \
@@ -192,6 +197,11 @@ GWAS-VCF fields are interpreted as follows:
 - `INFO=FORMAT/SI` when present; and
 - a VCF declaring `StudyType=CaseControl` requires `POPULATION_PREV`.
 
+The converter does not introduce additional MAF, INFO, MHC, population-AF or
+palindromic-variant QC thresholds. Input is assumed to have completed the
+user's scientific QC. Structural requirements needed to calculate valid
+statistics are still enforced.
+
 ### Cross-trait allele alignment
 
 The first observed allele pair for each SNP establishes its reference
@@ -237,7 +247,9 @@ count to `((traits+1)*(traits+2)/2)+1`. Munging can use multiple workers, but
 | `*_fastasset_results.tsv.gz` | Positive/negative directional subset results |
 | `*_fastasset_meta.tsv.gz` | ASSET fixed-effect Meta result for screened, selection-adjusted traits |
 | `*_fastasset_qc.tsv.gz` | Per-SNP status, severity, valid/invalid traits, direction counts and runtime |
+| `*_direction_limit_exceeded.tsv.gz` | SNPs skipped because the screened-trait guard was exceeded; analysis continues for other SNPs |
 | `*_fastasset_summary.tsv` | Counts by QC status and severity |
+| `manifest_ldsc_trait_match.tsv` | Common traits and traits missing from either the manifest or LDSC, with retained analysis order |
 | `fastasset_failed_allele_alignments.tsv` | Every excluded incompatible SNP–trait observation |
 | `*_LDSCoutput.RData` | Automatically generated GenomicSEM LDSC object |
 | `trait_correlation_normalized.tsv.gz` | Normalized and reordered correlation used by FastASSET |
@@ -256,12 +268,14 @@ If dependencies are already installed:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.4.6.tar.gz
+R CMD INSTALL release/fastASSETcli_0.4.7.tar.gz
 ```
 
 ## Scientific behavior in one place
 
-- Manifest row order is canonical for FastASSET and both LDSC matrix axes.
+- Manifest row order is canonical among traits common to the manifest and
+  LDSC object. Non-common manifest rows, including their sample/file entries,
+  are excluded with warnings and an audit record.
 - GenomicSEM `$I` is loaded or generated, then normalized as
   `D^(-1/2) I D^(-1/2)` and checked for positive definiteness.
 - ASSET is called with `side=2`, `search=2` and `meta=TRUE` by default.
@@ -275,7 +289,7 @@ scientific rationale and severity of each correction.
 
 ## Release archive
 
-`release/fastASSETcli_0.4.6.tar.gz` is the current installable source archive.
+`release/fastASSETcli_0.4.7.tar.gz` is the current installable source archive.
 Earlier archives remain available for reproducibility.
 
 ## Upstream terms

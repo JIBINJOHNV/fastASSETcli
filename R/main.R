@@ -38,6 +38,8 @@ fastasset_cli_main <- function(arguments = commandArgs(trailingOnly = TRUE)) {
   cat("  results: ", outputs$results, "\n", sep = "")
   cat("  meta:    ", outputs$meta, "\n", sep = "")
   cat("  QC:      ", outputs$qc, "\n", sep = "")
+  cat("  limit:   ", outputs$direction_limit_exceeded, "\n", sep = "")
+  cat("  traits:  ", outputs$trait_match_file, "\n", sep = "")
   cat("  summary: ", outputs$summary, "\n", sep = "")
   invisible(outputs)
 }
