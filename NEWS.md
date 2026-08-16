@@ -1,3 +1,11 @@
+# fastASSETcli 0.4.8
+
+- Import `data.table` in `NAMESPACE`, making the installed package explicitly
+  data.table-aware. This fixes the `cedta()` runtime error raised when package
+  functions use `:=`, `.N`, or grouped `data.table` expressions.
+- Added a regression assertion that the installed package namespace contains
+  the required `data.table` import.
+
 # fastASSETcli 0.4.7
 
 - In existing-LDSC mode, compare manifest traits with the native GenomicSEM
