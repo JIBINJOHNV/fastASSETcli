@@ -188,6 +188,13 @@ control totals are retained only as provenance.
 
 ### VCF conversion
 
+Converted files use both manifest order and a filesystem-safe version of the
+exact manifest `TRAIT`, for example
+`trait_0002_ANXA1_P04083_OID30617_v1_Inflammation_II.tsv.gz`. The corresponding
+metadata and in-progress `bcftools-query`/stderr files use the same stem, so a
+file remains traceable to its trait during parallel conversion. The resolved
+manifest preserves the original, unsanitized trait name.
+
 GWAS-VCF fields are interpreted as follows:
 
 - `A1=ALT`, `A2=REF` and `BETA=FORMAT/ES`;
@@ -268,7 +275,7 @@ If dependencies are already installed:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.4.8.tar.gz
+R CMD INSTALL release/fastASSETcli_0.4.9.tar.gz
 ```
 
 ## Scientific behavior in one place
@@ -289,7 +296,7 @@ scientific rationale and severity of each correction.
 
 ## Release archive
 
-`release/fastASSETcli_0.4.8.tar.gz` is the current installable source archive.
+`release/fastASSETcli_0.4.9.tar.gz` is the current installable source archive.
 Earlier archives remain available for reproducibility.
 
 ## Upstream terms

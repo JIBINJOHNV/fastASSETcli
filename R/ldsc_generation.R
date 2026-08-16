@@ -68,6 +68,35 @@ is_vcf_summary_path <- function(path) {
   grepl("\\.(vcf|vcf\\.gz|vcf\\.bgz|bcf)$", tolower(path))
 }
 
+safe_trait_filename <- function(trait, max_characters = 120L) {
+  trait <- trimws(as.character(trait))
+  if (length(trait) != 1L || is.na(trait) || !nzchar(trait)) {
+    stop("Cannot create a VCF-conversion filename from an empty trait name.")
+  }
+  safe <- iconv(trait, from = "", to = "ASCII//TRANSLIT", sub = "_")
+  if (is.na(safe)) safe <- trait
+  safe <- gsub("[^A-Za-z0-9._-]+", "_", safe)
+  safe <- gsub("_+", "_", safe)
+  safe <- gsub("^[._-]+|[._-]+$", "", safe)
+  safe <- substr(safe, 1L, as.integer(max_characters))
+  safe <- gsub("[._-]+$", "", safe)
+  if (!nzchar(safe)) safe <- "unnamed_trait"
+  safe
+}
+
+vcf_conversion_paths <- function(manifest, rows, conversion_dir) {
+  labels <- vapply(
+    manifest[["trait"]][rows], safe_trait_filename, character(1L)
+  )
+  stems <- sprintf(
+    "trait_%04d_%s", manifest[["order"]][rows], labels
+  )
+  list(
+    output = file.path(conversion_dir, paste0(stems, ".tsv.gz")),
+    metadata = file.path(conversion_dir, paste0(stems, ".metadata.tsv"))
+  )
+}
+
 coerce_manifest_text <- function(values) {
   text <- trimws(as.character(values))
   missing <- is.na(values) | !nzchar(text) |
@@ -867,12 +896,9 @@ prepare_manifest_vcf_files <- function(params, manifest, generation_dir) {
   }
   conversion_dir <- file.path(generation_dir, "vcf_converted")
   dir.create(conversion_dir, recursive = TRUE, showWarnings = FALSE)
-  output_files <- file.path(
-    conversion_dir, sprintf("trait_%04d.tsv.gz", manifest[["order"]][rows])
-  )
-  metadata_files <- file.path(
-    conversion_dir, sprintf("trait_%04d.metadata.tsv", manifest[["order"]][rows])
-  )
+  conversion_paths <- vcf_conversion_paths(manifest, rows, conversion_dir)
+  output_files <- conversion_paths$output
+  metadata_files <- conversion_paths$metadata
   worker <- function(task) {
     row <- rows[task]
     tryCatch(
