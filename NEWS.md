@@ -1,3 +1,13 @@
+# fastASSETcli 0.4.5
+
+- Fixed quantitative and binary VCF conversion when `data.table::fread()` is
+  configured by the R environment to return a base `data.frame`. Valid-row
+  filtering is now explicitly row-oriented and no longer fails with
+  `undefined columns selected`.
+- Made the bcftools query reader explicitly return a `data.table`, validate the
+  extracted field count before assigning names, and report the expected VCF
+  fields in any future column-count error.
+
 # fastASSETcli 0.4.4
 
 - Reorganized the main README into a user-first sequence covering

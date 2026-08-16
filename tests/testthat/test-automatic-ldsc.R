@@ -345,6 +345,38 @@ test_that("VCF conversion applies allele, P, N and prevalence rules", {
   expect_equal(quantitative$table$N, query$NEF)
 })
 
+test_that("VCF valid-row filtering is independent of the input table class", {
+  query <- data.frame(
+    CHR = c("10", "10"),
+    POS = c(60684, 61331),
+    SNP = c("rs569167217", "rs548639866"),
+    REF = c("A", "A"),
+    ALT = c("C", "G"),
+    ES = c(-0.0174562, -0.0168509),
+    SE = c(0.0274115, -1),
+    LP = c(0.280468, 0.268773),
+    AF = c(0.0250797, 0.025207),
+    NEF = c(32867, 32867),
+    SS = c(32867, 32867),
+    SI = c(0.785415, 0.782247),
+    stringsAsFactors = FALSE
+  )
+
+  converted <- fastASSETcli:::standardize_vcf_query_table(
+    query,
+    binary = FALSE,
+    supplied_sample_prev = NA_real_,
+    has_info = TRUE,
+    source_file = "quantitative.vcf.gz"
+  )
+
+  expect_equal(converted$input_rows, 2L)
+  expect_equal(converted$output_rows, 1L)
+  expect_equal(converted$dropped_rows, 1L)
+  expect_identical(converted$table$SNP, "rs569167217")
+  expect_equal(converted$table$N, 32867)
+})
+
 test_that("binary VCF prevalence uses separate NC and NCO medians", {
   query <- data.table::data.table(
     CHR = c("1", "1", "1"),

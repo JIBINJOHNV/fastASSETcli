@@ -435,7 +435,10 @@ standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
   }
 
   input_rows <- nrow(table)
-  table <- table[valid]
+  # Always use explicit row indexing.  `fread()` can be configured globally to
+  # return a data.frame; for a data.frame, `table[valid]` means column selection
+  # and fails with "undefined columns selected" when `valid` is row-sized.
+  table <- table[which(valid), ]
   if (nrow(table) == 0L) {
     stop("No valid biallelic SNP rows remained after VCF conversion: ", source_file)
   }
@@ -664,13 +667,22 @@ prepare_one_vcf_summary <- function(source_file, requested_sample,
     raw_output,
     paste0("bcftools query for ", source_file)
   )
+  expected_columns <- c("CHR", "POS", "SNP", "REF", "ALT", queried_fields)
   query <- data.table::fread(
     raw_output,
     header = FALSE,
-    col.names = c("CHR", "POS", "SNP", "REF", "ALT", queried_fields),
     na.strings = c(".", "NA", ""),
-    check.names = FALSE
+    check.names = FALSE,
+    data.table = TRUE
   )
+  if (ncol(query) != length(expected_columns)) {
+    stop(
+      "bcftools query produced ", ncol(query), " column(s), but ",
+      length(expected_columns), " were expected for ", source_file,
+      ". Expected columns: ", paste(expected_columns, collapse = ", "), "."
+    )
+  }
+  data.table::setnames(query, expected_columns)
 
   header_cases <- if (length(sample_metadata) == 1L) {
     parse_optional_positive_number(
