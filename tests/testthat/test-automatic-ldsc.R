@@ -38,6 +38,11 @@ test_that("the removed fastasset-input option is rejected", {
   ))
 })
 
+test_that("the installed package namespace is data.table-aware", {
+  imports <- getNamespaceImports("fastASSETcli")
+  expect_true("data.table" %in% names(imports))
+})
+
 test_that("existing LDSC mode is fully specified by manifest and LDSC object", {
   directory <- tempfile("manifest_existing_ldsc_test_")
   dir.create(directory)

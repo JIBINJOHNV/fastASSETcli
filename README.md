@@ -268,7 +268,7 @@ If dependencies are already installed:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.4.7.tar.gz
+R CMD INSTALL release/fastASSETcli_0.4.8.tar.gz
 ```
 
 ## Scientific behavior in one place
@@ -289,7 +289,7 @@ scientific rationale and severity of each correction.
 
 ## Release archive
 
-`release/fastASSETcli_0.4.7.tar.gz` is the current installable source archive.
+`release/fastASSETcli_0.4.8.tar.gz` is the current installable source archive.
 Earlier archives remain available for reproducibility.
 
 ## Upstream terms

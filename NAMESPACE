@@ -1,1 +1,2 @@
+import(data.table)
 export(fastasset_cli_main)
