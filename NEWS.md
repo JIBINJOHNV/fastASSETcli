@@ -1,3 +1,12 @@
+# fastASSETcli 0.4.6
+
+- Made every temporary `bcftools query` table self-describing by requesting a
+  header directly from bcftools. Interrupted conversions can now be inspected
+  with ordinary tools such as `head` without relying on positional knowledge.
+- Added a dedicated header-aware query reader that validates the field count
+  and replaces bcftools's sample-specific display labels with the canonical
+  package column schema in memory. This avoids rewriting large temporary files.
+
 # fastASSETcli 0.4.5
 
 - Fixed quantitative and binary VCF conversion when `data.table::fread()` is

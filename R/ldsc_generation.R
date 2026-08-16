@@ -554,6 +554,28 @@ read_conversion_metadata <- function(path) {
   stats::setNames(as.list(metadata[["value"]]), metadata[["parameter"]])
 }
 
+read_bcftools_query_output <- function(path, expected_columns, source_file) {
+  query <- data.table::fread(
+    path,
+    header = TRUE,
+    na.strings = c(".", "NA", ""),
+    check.names = FALSE,
+    data.table = TRUE
+  )
+  if (ncol(query) != length(expected_columns)) {
+    stop(
+      "bcftools query produced ", ncol(query), " column(s), but ",
+      length(expected_columns), " were expected for ", source_file,
+      ". Expected columns: ", paste(expected_columns, collapse = ", "), "."
+    )
+  }
+  # bcftools labels queried FORMAT fields with the selected sample and may add
+  # numeric column prefixes. The extraction order has already been validated,
+  # so replace those display labels with the package's canonical schema.
+  data.table::setnames(query, expected_columns)
+  query
+}
+
 prepare_one_vcf_summary <- function(source_file, requested_sample,
                                     population_prev, supplied_sample_prev,
                                     output_file, metadata_file, bcftools,
@@ -661,28 +683,16 @@ prepare_one_vcf_summary <- function(source_file, requested_sample,
   run_bcftools_to_file(
     bcftools,
     c(
-      "query", "--samples", shQuote(sample), "--format",
+      "query", "--print-header", "--samples", shQuote(sample), "--format",
       shQuote(query_format), shQuote(source_file)
     ),
     raw_output,
     paste0("bcftools query for ", source_file)
   )
   expected_columns <- c("CHR", "POS", "SNP", "REF", "ALT", queried_fields)
-  query <- data.table::fread(
-    raw_output,
-    header = FALSE,
-    na.strings = c(".", "NA", ""),
-    check.names = FALSE,
-    data.table = TRUE
+  query <- read_bcftools_query_output(
+    raw_output, expected_columns, source_file
   )
-  if (ncol(query) != length(expected_columns)) {
-    stop(
-      "bcftools query produced ", ncol(query), " column(s), but ",
-      length(expected_columns), " were expected for ", source_file,
-      ". Expected columns: ", paste(expected_columns, collapse = ", "), "."
-    )
-  }
-  data.table::setnames(query, expected_columns)
 
   header_cases <- if (length(sample_metadata) == 1L) {
     parse_optional_positive_number(

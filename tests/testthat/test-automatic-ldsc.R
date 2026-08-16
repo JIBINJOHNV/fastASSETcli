@@ -377,6 +377,45 @@ test_that("VCF valid-row filtering is independent of the input table class", {
   expect_equal(converted$table$N, 32867)
 })
 
+test_that("header-aware bcftools query parsing restores canonical names", {
+  query_file <- tempfile("bcftools_query_", fileext = ".tsv")
+  writeLines(
+    c(
+      paste(
+        c(
+          "#[1]CHROM", "[2]POS", "[3]ID", "[4]REF", "[5]ALT",
+          "[6]trait:ES", "[7]trait:SE", "[8]trait:LP",
+          "[9]trait:AF", "[10]trait:NEF", "[11]trait:SS",
+          "[12]trait:SI"
+        ),
+        collapse = "\t"
+      ),
+      paste(
+        c(
+          "10", "60684", "rs569167217", "A", "C", "-0.0174562",
+          "0.0274115", "0.280468", "0.0250797", "32867", "32867",
+          "0.785415"
+        ),
+        collapse = "\t"
+      )
+    ),
+    query_file
+  )
+  expected <- c(
+    "CHR", "POS", "SNP", "REF", "ALT", "ES", "SE", "LP", "AF",
+    "NEF", "SS", "SI"
+  )
+
+  query <- fastASSETcli:::read_bcftools_query_output(
+    query_file, expected, "quantitative.vcf.gz"
+  )
+
+  expect_identical(names(query), expected)
+  expect_equal(nrow(query), 1L)
+  expect_identical(query$SNP, "rs569167217")
+  expect_equal(query$NEF, 32867)
+})
+
 test_that("binary VCF prevalence uses separate NC and NCO medians", {
   query <- data.table::data.table(
     CHR = c("1", "1", "1"),
