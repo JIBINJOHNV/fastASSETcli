@@ -34,6 +34,7 @@ fastasset_cli_main <- function(arguments = commandArgs(trailingOnly = TRUE)) {
   outputs <- run_asset_pipeline(params)
   cat("\nCompleted outputs:\n")
   cat("  input:   ", outputs$analysis_input, "\n", sep = "")
+  cat("  IDs:     ", outputs$variant_map_file, "\n", sep = "")
   cat("  LDSC:    ", outputs$ldsc_rdata, "\n", sep = "")
   cat("  results: ", outputs$results, "\n", sep = "")
   cat("  meta:    ", outputs$meta, "\n", sep = "")

@@ -20,20 +20,21 @@ flowchart TD
     C1 -->|"No"| D
     C4 --> D{"Input file type"}
     D -->|"VCF or BCF"| E["Validate sample and FORMAT fields"]
-    E --> F["Convert with bcftools and derive P, alleles, N and prevalence"]
+    E --> F["Convert with bcftools; retain rsID and create CHR_POS_REF_ALT ID"]
     D -->|"Tabular"| G["Read and map required columns"]
-    F --> H["Create one indexed union of SNP IDs"]
-    G --> H
-    H --> I{"Allele relationship for each SNP-trait pair"}
+    F --> H1["FastASSET union on CHR_POS_REF_ALT; write rsID map"]
+    G --> H["FastASSET union on input SNP IDs"]
+    H --> I{"Table-input allele relationship"}
     I -->|"Exact"| J["Keep BETA"]
     I -->|"Swapped"| K["Reverse BETA sign"]
     I -->|"Incompatible"| L["Set BETA, SE and NEF to NA and log failure"]
-    J --> M["Write prepared wide table and alignment audits"]
+    H1 --> M["Write prepared wide table, ID map and audits"]
+    J --> M
     K --> M
     L --> M
     M --> N{"Existing LDSC object supplied?"}
     N -->|"Yes"| Q["Use the preloaded common-trait I matrix"]
-    N -->|"No"| P["Munge each trait, run GenomicSEM LDSC and save object"]
+    N -->|"No"| P["Munge each trait; VCF uses original rsID and AF; run LDSC"]
     P --> Q
     Q --> R["Normalize I to correlation and validate positive definiteness"]
     R --> S["Create correlation blocks and signature-addressed SNP chunks"]
@@ -103,16 +104,21 @@ The standardized representation uses:
 
 | Output field | VCF source or calculation |
 |---|---|
-| SNP | VCF ID; rows with missing or `.` IDs are excluded |
+| SNP | Original VCF ID/rsID for GenomicSEM munging; duplicates and missing IDs are retained at conversion |
+| FASTASSET_ID | Normalized `CHR_POS_REF_ALT` for FastASSET merging |
 | A1 | ALT |
 | A2 | REF |
 | BETA | `FORMAT/ES` |
 | SE | `FORMAT/SE` |
 | P | `10^(-FORMAT/LP)` |
-| MAF | `min(FORMAT/AF, 1-FORMAT/AF)` |
+| AF | `FORMAT/AF`; mapped to GenomicSEM's `MAF` input role during munging |
 | INFO | `FORMAT/SI`, when present |
 | Quantitative N | `FORMAT/NEF` |
 | Binary LDSC N | `FORMAT/NC + FORMAT/NCO` |
+
+The physical converted-table order is `SNP`, `FASTASSET_ID`, `A1`, `A2`,
+`BETA`, `SE`, `P`, `N`, optional `INFO`, `CHR`, `POS`, `LP`, `AF`, optional
+`SS`, optional `NC`/`NCO`, and optional `NEF`. The header is always written.
 
 For a binary VCF, one sample prevalence is calculated as
 `median(NC)/(median(NC)+median(NCO))`. Header totals are retained as provenance
@@ -121,6 +127,13 @@ and are not substituted for the per-SNP counts.
 No additional MAF, INFO, MHC, population-frequency or palindromic-SNP QC filter
 is applied during conversion. The builder enforces only the structural and
 numeric requirements needed to construct the LDSC and FastASSET inputs.
+
+The original `SNP` and `FASTASSET_ID` deliberately serve different consumers.
+The LDSC branch passes `SNP`, A1, A2 and AF to `GenomicSEM::munge()`, which does
+the HapMap3 ID-and-allele match. There is no pre-munge duplicate-rsID check.
+The FastASSET branch uses `FASTASSET_ID`, so two REF/ALT records sharing one
+rsID remain separate. An exact duplicate `CHR_POS_REF_ALT` within one trait is
+still a structural error because two rows cannot fill one trait/SNP cell.
 
 ### 4. Read tabular inputs
 
@@ -144,15 +157,22 @@ The internal `<trait>.NEF` columns use these rules:
 
 No four-times rescaling is applied to the binary FastASSET quantity.
 
-### 6. Build one indexed SNP union
+### 6. Build one indexed variant union
 
-The pipeline creates one union of SNP IDs and fills each trait's BETA, SE and
-NEF columns by indexed matching. It does not repeatedly merge an expanding
-wide table. A SNP absent from a trait remains `NA` for that trait.
+The pipeline creates one union key and fills each trait's BETA, SE and NEF
+columns by indexed matching. VCF/BCF inputs use normalized
+`CHR_POS_REF_ALT`; tabular inputs use the mapped SNP ID. It does not repeatedly
+merge an expanding wide table. A variant absent from a trait remains `NA` for
+that trait.
 
-### 7. Align alleles across traits
+### 7. Apply input-specific allele handling
 
-The first observed A1/A2 pair for a SNP establishes the reference orientation.
+For VCF/BCF inputs, A1 is ALT, A2 is REF and the ordered REF/ALT pair is already
+encoded in `FASTASSET_ID`. The pipeline therefore does not perform another
+cross-trait allele comparison and never flips VCF effects during the union.
+
+For tabular inputs, the first observed A1/A2 pair for a SNP establishes the
+reference orientation:
 
 | Relationship | BETA | SE and NEF | Analysis action |
 |---|---|---|---|
@@ -177,7 +197,9 @@ ID
 ```
 
 Preparation also writes the allele reference, per-trait build audit, resolved
-manifest, provenance and completion signature.
+manifest, provenance and completion signature. For VCF inputs,
+`fastasset_variant_id_map.tsv.gz` records `trait`, `FASTASSET_ID`, `RSID`,
+`CHR`, `POS`, `REF` and `ALT` for every retained row.
 
 ### 9. Obtain the LDSC intercept covariance
 
@@ -192,7 +214,9 @@ manifest rows before VCF sample selection or tabular reading.
 In automatic-LDSC mode, the package:
 
 1. validates HapMap3 and every LD-score reference file;
-2. munges each trait in manifest order;
+2. munges each trait in manifest order; standardized VCFs supply their original
+   `SNP`/rsID and map `AF` to GenomicSEM's `MAF` role without prior rsID
+   deduplication;
 3. runs `GenomicSEM::ldsc()`;
 4. assigns exact trait names to both axes of generated matrices; and
 5. saves the complete LDSC object in a separate `.RData` file.
@@ -222,9 +246,9 @@ result, Meta, QC, direction-limit report and completion files all exist.
 ### 12. Validate traits separately at each SNP
 
 A trait is valid at a SNP only when BETA, SE and NEF are finite, `SE>0` and
-`NEF>0`. Invalid or missing traits—including incompatible allele observations
-set to `NA`—are removed before screening or ASSET. The corresponding rows and
-columns are removed from the correlation matrix.
+`NEF>0`. Invalid or missing traits—including incompatible tabular-input allele
+observations set to `NA`—are removed before screening or ASSET. The
+corresponding rows and columns are removed from the correlation matrix.
 
 If no valid trait remains, the SNP receives `NO_VALID_TRAITS`. If the number
 remaining is below the user-configured `--min-available-traits`, it receives
@@ -304,6 +328,7 @@ auditable even if a later input file fails.
 <output-dir>/<run-name>_prepared_input_<signature>/
 ├── <run-name>_fastasset_wide.tsv.gz
 ├── fastasset_allele_reference.tsv.gz
+├── fastasset_variant_id_map.tsv.gz
 ├── fastasset_input_build_audit.tsv
 ├── fastasset_failed_allele_alignments.tsv
 ├── manifest_resolved.tsv
@@ -314,8 +339,10 @@ auditable even if a later input file fails.
     └── trait_0001_<trait-name>.metadata.tsv
 ```
 
+`fastasset_variant_id_map.tsv.gz` contains one row per retained VCF
+trait/variant observation and only a header for table-only runs.
 `fastasset_failed_allele_alignments.tsv` is always created. It contains only a
-header when no incompatible observations are found.
+header when no incompatible tabular observations are found.
 
 ### Automatically generated LDSC
 
@@ -359,8 +386,8 @@ reused; changes create a new directory instead of mixing incompatible results.
 
 ## Recommended interpretation order
 
-1. Check `fastasset_input_build_audit.tsv` and
-   `fastasset_failed_allele_alignments.tsv`.
+1. Check `fastasset_input_build_audit.tsv`, `fastasset_variant_id_map.tsv.gz`
+   and `fastasset_failed_allele_alignments.tsv`.
 2. Check `<run-name>_manifest_ldsc_trait_match.tsv`,
    `ldsc_trait_order_audit.tsv` and
    `trait_correlation_normalized.tsv.gz`.

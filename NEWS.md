@@ -1,3 +1,22 @@
+# fastASSETcli 0.5.1
+
+- Split VCF identifiers by consumer. Automatic GenomicSEM munging receives the
+  original VCF `ID` in `SNP`, including repeated rsIDs, while FastASSET merges
+  traits on the deterministic `FASTASSET_ID=CHR_POS_REF_ALT` key.
+- Removed the pre-munge duplicate-rsID rejection. HapMap3 ID/allele matching is
+  left to `GenomicSEM::munge()` as intended; a repeated rsID representing
+  different REF/ALT records no longer blocks VCF preparation.
+- Added `fastasset_variant_id_map.tsv.gz`, containing trait, FastASSET ID,
+  original rsID, chromosome, position, REF and ALT for every retained VCF row.
+- Skip the redundant cross-trait allele comparison for VCF records because REF
+  and ALT are part of the FastASSET key. Tabular inputs retain the existing
+  exact/swapped/incompatible allele policy.
+- Preserve `FORMAT/AF` as `AF` in the standardized VCF table and map it to the
+  GenomicSEM `MAF` input role. No pre-munge MAF or duplicate-rsID filtering is
+  added by the converter.
+- Updated preparation, LDSC and analysis signatures so outputs from the prior
+  identifier contract cannot be silently reused.
+
 # fastASSETcli 0.5.0
 
 - Match the published genome-wide analysis for single-trait cases. A SNP with

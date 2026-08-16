@@ -512,10 +512,18 @@ standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
   )
 
   table[["SNP"]] <- trimws(as.character(table[["SNP"]]))
+  missing_rsid <- is.na(table[["SNP"]]) | !nzchar(table[["SNP"]]) |
+    table[["SNP"]] == "."
+  table[["SNP"]][missing_rsid] <- NA_character_
+  table[["CHR"]] <- toupper(sub(
+    "^CHR", "", trimws(as.character(table[["CHR"]])),
+    ignore.case = TRUE
+  ))
   table[["REF"]] <- toupper(trimws(as.character(table[["REF"]])))
   table[["ALT"]] <- toupper(trimws(as.character(table[["ALT"]])))
-  valid <- !is.na(table[["SNP"]]) & nzchar(table[["SNP"]]) &
-    table[["SNP"]] != "." &
+  valid <- !is.na(table[["CHR"]]) & nzchar(table[["CHR"]]) &
+    is.finite(table[["POS"]]) & table[["POS"]] > 0 &
+    table[["POS"]] == floor(table[["POS"]]) &
     grepl("^[ACGT]$", table[["REF"]]) &
     grepl("^[ACGT]$", table[["ALT"]]) &
     table[["REF"]] != table[["ALT"]] &
@@ -542,15 +550,14 @@ standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
   if (nrow(table) == 0L) {
     stop("No valid biallelic SNP rows remained after VCF conversion: ", source_file)
   }
-  if (anyDuplicated(table[["SNP"]])) {
-    duplicates <- unique(table[["SNP"]][duplicated(table[["SNP"]])])
-    stop(
-      "VCF contains duplicate SNP identifiers after filtering: ",
-      paste(utils::head(duplicates, 10L), collapse = ", "),
-      if (length(duplicates) > 10L) " ..." else "",
-      ". Normalize/de-duplicate the VCF before analysis: ", source_file
-    )
-  }
+
+  position_text <- format(
+    table[["POS"]], scientific = FALSE, trim = TRUE, digits = 22
+  )
+  fastasset_id <- paste(
+    table[["CHR"]], position_text, table[["REF"]], table[["ALT"]],
+    sep = "_"
+  )
 
   minimum_log10 <- -log10(.Machine$double.xmin)
   p_was_capped <- table[["LP"]] > minimum_log10
@@ -585,13 +592,13 @@ standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
 
   output <- data.table::data.table(
     SNP = table[["SNP"]],
+    FASTASSET_ID = fastasset_id,
     A1 = table[["ALT"]],
     A2 = table[["REF"]],
     BETA = table[["ES"]],
     SE = table[["SE"]],
     P = raw_p,
-    N = per_snp_n,
-    MAF = pmin(table[["AF"]], 1 - table[["AF"]])
+    N = per_snp_n
   )
   if (has_info) output[["INFO"]] <- table[["SI"]]
   output[["CHR"]] <- as.character(table[["CHR"]])
@@ -616,6 +623,15 @@ standardize_vcf_query_table <- function(table, binary, supplied_sample_prev,
     dropped_rows = input_rows - nrow(output),
     p_values_capped = sum(p_was_capped)
   )
+}
+
+vcf_munge_column_map <- function(has_info = FALSE) {
+  mapping <- list(
+    SNP = "SNP", A1 = "A1", A2 = "A2", effect = "BETA",
+    P = "P", N = "N", MAF = "AF"
+  )
+  if (isTRUE(has_info)) mapping[["INFO"]] <- "INFO"
+  mapping
 }
 
 write_generated_table <- function(table, path) {
@@ -858,6 +874,7 @@ prepare_one_vcf_summary <- function(source_file, requested_sample,
       dropped_rows = standardized$dropped_rows,
       p_values_capped = standardized$p_values_capped,
       p_conversion = "P=10^(-LP); values below .Machine$double.xmin capped",
+      fastasset_id = "normalized CHR_POS_REF_ALT; independent of VCF rsID",
       effect_allele = "A1=ALT; BETA=FORMAT/ES",
       other_allele = "A2=REF",
       ldsc_n = if (binary) "FORMAT/NC + FORMAT/NCO" else "FORMAT/NEF",
@@ -1040,7 +1057,7 @@ make_ldsc_generation_signature <- function(params, manifest, reference_files) {
     )
   }
   values <- c(
-    "ldsc_generation_version=2026-08-15-v3-median-prevalence",
+    "ldsc_generation_version=2026-08-16-v4-vcf-rsid-af",
     paste0("traits=", paste(manifest$trait, collapse = ";")),
     paste0("source_format=", paste(manifest$source_format, collapse = ";")),
     paste0("vcf_sample=", paste(manifest$vcf_sample, collapse = ";")),
@@ -1212,19 +1229,17 @@ generate_ldsc_object <- function(params, analysis_traits, prepared_input) {
     vcf_no_info_rows <- which(
       manifest$source_format == "VCF" & !manifest$vcf_has_info
     )
-    vcf_map <- list(
-      SNP = "SNP", A1 = "A1", A2 = "A2", effect = "BETA",
-      P = "P", N = "N", MAF = "MAF"
-    )
     genomicsem_map <- params$munge_column_map[
       names(params$munge_column_map) %in%
         c("SNP", "A1", "A2", "effect", "INFO", "P", "N", "MAF", "Z")
     ]
     run_munge_group(table_rows, genomicsem_map, "table")
     run_munge_group(
-      vcf_info_rows, c(vcf_map, list(INFO = "INFO")), "vcf_info"
+      vcf_info_rows, vcf_munge_column_map(TRUE), "vcf_info"
     )
-    run_munge_group(vcf_no_info_rows, vcf_map, "vcf_no_info")
+    run_munge_group(
+      vcf_no_info_rows, vcf_munge_column_map(FALSE), "vcf_no_info"
+    )
   } else {
     message("All signature-matched munged files exist; skipping munging.")
   }
