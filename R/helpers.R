@@ -9,7 +9,7 @@ make_run_signature <- function(params, trait_names, correlation_matrix) {
   input_info <- file.info(params$analysis_input)
   ldsc_info <- file.info(params$ldsc_rdata)
   signature_values <- c(
-    "pipeline_version=2026-08-16-v5-common-traits-direction-report",
+    "pipeline_version=2026-08-16-v6-published-single-trait",
     paste0("input=", params$analysis_input),
     paste0("input_size=", input_info$size),
     paste0("input_mtime=", as.numeric(input_info$mtime)),

@@ -62,7 +62,17 @@ test_that("existing LDSC mode is fully specified by manifest and LDSC object", {
     "--run-name", "test"
   ))
   expect_identical(params$ldsc_mode, "existing")
+  expect_identical(params$min_available_traits, 1L)
   expect_false("fastasset_input" %in% names(params))
+
+  zero_threshold <- fastASSETcli:::parse_fastasset_cli(c(
+    "--sumstats-manifest", manifest,
+    "--ldsc-rdata", ldsc,
+    "--output-dir", directory,
+    "--run-name", "zero_threshold",
+    "--cor-thr", "0"
+  ))
+  expect_equal(zero_threshold$cor_thr, 0)
 })
 
 test_that("GenomicSEM column mapping is parsed exactly", {

@@ -256,6 +256,7 @@ detect_fastasset_columns <- function(column_names) {
 empty_result_table <- function() {
   data.table::data.table(
     ID = character(), status = character(), severity = character(),
+    screening_applied = logical(), analysis_scope = character(),
     p_two_sided = numeric(), p_positive = numeric(), p_negative = numeric(),
     beta_positive_adjusted = numeric(), se_positive_adjusted = numeric(),
     se_positive_meta = numeric(), beta_negative_adjusted = numeric(),
@@ -271,7 +272,8 @@ empty_result_table <- function() {
 empty_meta_table <- function() {
   data.table::data.table(
     ID = character(), status = character(), severity = character(),
-    meta_scope = character(),
+    screening_applied = logical(), meta_scope = character(),
+    n_analyzed_traits = integer(), analyzed_traits = character(),
     p_meta = numeric(), beta_meta_adjusted = numeric(),
     se_meta_adjusted = numeric(), n_screened_traits = integer(),
     n_screened_positive = integer(), n_screened_negative = integer(),
@@ -283,7 +285,9 @@ empty_meta_table <- function() {
 empty_qc_table <- function() {
   data.table::data.table(
     ID = character(), status = character(), severity = character(),
-    message = character(), n_input_traits = integer(), n_valid_traits = integer(),
+    message = character(), screening_applied = logical(),
+    analysis_scope = character(), n_input_traits = integer(),
+    n_valid_traits = integer(),
     n_invalid_traits = integer(), invalid_traits = character(),
     n_screened_traits = integer(), n_screened_positive = integer(),
     n_screened_negative = integer(), screened_positive_traits = character(),

@@ -240,7 +240,9 @@ scr_transform <- function(betahat, SE, SNP, traits_i, cor, block, Neff,
 make_fastasset_qc <- function(snp, status, severity, message,
                               n_input_traits, valid_traits, input_traits = NULL,
                               screened_positive = character(),
-                              screened_negative = character()) {
+                              screened_negative = character(),
+                              screening_applied = NA,
+                              analysis_scope = "NOT_ANALYZED") {
   n_positive <- length(screened_positive)
   n_negative <- length(screened_negative)
   invalid_traits <- if (is.null(input_traits)) {
@@ -254,6 +256,8 @@ make_fastasset_qc <- function(snp, status, severity, message,
     status = status,
     severity = severity,
     message = message,
+    screening_applied = as.logical(screening_applied),
+    analysis_scope = as.character(analysis_scope),
     n_input_traits = as.integer(n_input_traits),
     n_valid_traits = as.integer(length(valid_traits)),
     n_invalid_traits = as.integer(n_input_traits - length(valid_traits)),
@@ -269,15 +273,83 @@ make_fastasset_qc <- function(snp, status, severity, message,
   )
 }
 
+make_single_trait_fastasset_result <- function(snp, trait, beta, sigma,
+                                                include_meta = TRUE) {
+  if (length(trait) != 1L || length(beta) != 1L || length(sigma) != 1L ||
+      !is.finite(beta) || !is.finite(sigma) || sigma <= 0) {
+    stop("Single-trait closed-form input must contain one finite effect and positive SE.")
+  }
+
+  snp <- as.character(snp)
+  trait <- as.character(trait)
+  beta <- as.numeric(beta)
+  sigma <- as.numeric(sigma)
+  p_two_sided <- as.numeric(2 * stats::pnorm(-abs(beta / sigma)))
+  positive <- beta >= 0
+
+  pheno_positive <- matrix(
+    positive,
+    nrow = 1L,
+    dimnames = list(snp, trait)
+  )
+  pheno_negative <- matrix(
+    !positive,
+    nrow = 1L,
+    dimnames = list(snp, trait)
+  )
+
+  positive_value <- function(value) if (positive) value else NA_real_
+  negative_value <- function(value) if (positive) NA_real_ else value
+
+  subset_two_sided <- list(
+    pval = stats::setNames(p_two_sided, snp),
+    pval.1 = stats::setNames(if (positive) p_two_sided else 1, snp),
+    beta.1 = stats::setNames(positive_value(beta), snp),
+    sd.1 = stats::setNames(positive_value(sigma), snp),
+    pheno.1 = pheno_positive,
+    pval.2 = stats::setNames(if (positive) 1 else p_two_sided, snp),
+    beta.2 = stats::setNames(negative_value(beta), snp),
+    sd.2 = stats::setNames(negative_value(sigma), snp),
+    pheno.2 = pheno_negative,
+    sd.1.meta = stats::setNames(positive_value(sigma), snp),
+    sd.2.meta = stats::setNames(negative_value(sigma), snp)
+  )
+
+  meta <- if (include_meta) {
+    list(
+      pval = stats::setNames(p_two_sided, snp),
+      beta = stats::setNames(beta, snp),
+      sd = stats::setNames(sigma, snp)
+    )
+  } else {
+    NULL
+  }
+
+  list(
+    Meta = meta,
+    Subset.1sided = NULL,
+    Subset.2sided = subset_two_sided,
+    snp.vars = snp,
+    traits.lab = trait,
+    beta.hat = stats::setNames(beta, trait),
+    sigma.hat = stats::setNames(sigma, trait),
+    search = 2,
+    side = 2,
+    meta = include_meta,
+    which = "single_trait_closed_form"
+  )
+}
+
+direction_limit_exceeded <- function(beta, max_numtraits_per_side) {
+  sum(beta >= 0) > max_numtraits_per_side ||
+    sum(beta < 0) > max_numtraits_per_side
+}
+
 # Run fastASSET for one SNP and return both the ASSET object and auditable QC.
 fast_asset_2 <- function(snp, traits.lab, beta.hat, sigma.hat, Neff, cor, block,
                          scr_pthr = 0.05, max_numtraits_per_side = 16L,
-                         min_available_traits = 2L, meth_pval = "DLM",
+                         min_available_traits = 1L, meth_pval = "DLM",
                          include_meta = TRUE) {
-  if (!requireNamespace("ASSET", quietly = TRUE)) {
-    stop("The ASSET package is required.")
-  }
-
   n_traits <- length(traits.lab)
   if (any(c(length(beta.hat), length(sigma.hat), length(Neff)) != n_traits)) {
     stop("traits.lab, beta.hat, sigma.hat and Neff must have equal lengths.")
@@ -315,6 +387,17 @@ fast_asset_2 <- function(snp, traits.lab, beta.hat, sigma.hat, Neff, cor, block,
     sigma.hat > 0 & Neff > 0
   valid_traits <- traits.lab[valid]
 
+  if (length(valid_traits) == 0L) {
+    qc <- make_fastasset_qc(
+      snp, "NO_VALID_TRAITS", "WARNING",
+      "No trait had finite BETA, SE and NEF with SE > 0 and NEF > 0.",
+      n_traits, valid_traits, traits.lab,
+      screening_applied = FALSE,
+      analysis_scope = "NOT_ANALYZED"
+    )
+    return(list(result = NULL, qc = qc))
+  }
+
   if (length(valid_traits) < min_available_traits) {
     qc <- make_fastasset_qc(
       snp, "INSUFFICIENT_VALID_TRAITS", "WARNING",
@@ -322,7 +405,9 @@ fast_asset_2 <- function(snp, traits.lab, beta.hat, sigma.hat, Neff, cor, block,
         "Only ", length(valid_traits), " valid trait(s); minimum is ",
         min_available_traits, "."
       ),
-      n_traits, valid_traits, traits.lab
+      n_traits, valid_traits, traits.lab,
+      screening_applied = FALSE,
+      analysis_scope = "NOT_ANALYZED"
     )
     return(list(result = NULL, qc = qc))
   }
@@ -335,6 +420,31 @@ fast_asset_2 <- function(snp, traits.lab, beta.hat, sigma.hat, Neff, cor, block,
   # Reference transformation. Neff follows the upstream fastASSET definition.
   beta.standardized <- beta.hat / sigma.hat / sqrt(Neff)
   sigma.standardized <- 1 / sqrt(Neff)
+
+  # The published genome-wide analysis bypasses screening when only one valid
+  # trait exists and uses the ordinary two-sided GWAS z test.  The standardized
+  # beta/SE ratio is algebraically identical to the original beta/SE ratio.
+  if (length(valid_traits) == 1L) {
+    result <- make_single_trait_fastasset_result(
+      snp = snp,
+      trait = valid_traits,
+      beta = beta.standardized,
+      sigma = sigma.standardized,
+      include_meta = include_meta
+    )
+    qc <- make_fastasset_qc(
+      snp, "SINGLE_VALID_TRAIT_NO_SCREEN", "OK",
+      paste0(
+        "Only trait ", valid_traits,
+        " was valid; pre-screening and ASSET enumeration were bypassed and ",
+        "the published closed-form two-sided z test was used."
+      ),
+      n_traits, valid_traits, traits.lab,
+      screening_applied = FALSE,
+      analysis_scope = "SINGLE_VALID_TRAIT_UNSCREENED"
+    )
+    return(list(result = result, qc = qc))
+  }
 
   cormat <- cor[valid_traits, valid_traits, drop = FALSE]
   screened <- scr_transform(
@@ -361,13 +471,14 @@ fast_asset_2 <- function(snp, traits.lab, beta.hat, sigma.hat, Neff, cor, block,
     qc <- make_fastasset_qc(
       snp, "NO_TRAIT_PASSED_SCREEN", "INFO",
       paste0("No valid trait had pre-screening P < ", scr_pthr, "."),
-      n_traits, valid_traits, traits.lab
+      n_traits, valid_traits, traits.lab,
+      screening_applied = TRUE,
+      analysis_scope = "NOT_ANALYZED"
     )
     return(list(result = NULL, qc = qc))
   }
 
-  if (length(positive_traits) > max_numtraits_per_side ||
-      length(negative_traits) > max_numtraits_per_side) {
+  if (direction_limit_exceeded(screened_beta, max_numtraits_per_side)) {
     qc <- make_fastasset_qc(
       snp, "DIRECTION_LIMIT_EXCEEDED", "HIGH",
       paste0(
@@ -376,9 +487,35 @@ fast_asset_2 <- function(snp, traits.lab, beta.hat, sigma.hat, Neff, cor, block,
         "; configured maximum is ", max_numtraits_per_side,
         " per direction. SNP was not sent to exhaustive subset search."
       ),
-      n_traits, valid_traits, traits.lab, positive_traits, negative_traits
+      n_traits, valid_traits, traits.lab, positive_traits, negative_traits,
+      screening_applied = TRUE,
+      analysis_scope = "SCREENED_DIRECTION_LIMIT_EXCLUDED"
     )
     return(list(result = NULL, qc = qc))
+  }
+
+  # The published analysis uses the adjusted one-trait z statistic directly
+  # instead of routing it through ASSET's DLM machinery.
+  if (length(screened_traits) == 1L) {
+    result <- make_single_trait_fastasset_result(
+      snp = snp,
+      trait = screened_traits,
+      beta = screened_beta,
+      sigma = screened_se,
+      include_meta = include_meta
+    )
+    qc <- make_fastasset_qc(
+      snp, "SINGLE_TRAIT_AFTER_SCREEN", "OK",
+      paste0(
+        "Only trait ", screened_traits,
+        " remained after pre-screening; the published closed-form two-sided ",
+        "test was applied to its selection-adjusted z statistic."
+      ),
+      n_traits, valid_traits, traits.lab, positive_traits, negative_traits,
+      screening_applied = TRUE,
+      analysis_scope = "SINGLE_SCREENED_SELECTION_ADJUSTED_TRAIT"
+    )
+    return(list(result = result, qc = qc))
   }
 
   htraits_args <- list(
@@ -394,15 +531,18 @@ fast_asset_2 <- function(snp, traits.lab, beta.hat, sigma.hat, Neff, cor, block,
     meth.pval = meth_pval
   )
 
-  if (length(screened_traits) >= 2L) {
-    htraits_args$cor <- cormat[screened_traits, screened_traits, drop = FALSE]
-    htraits_args$cor.numr <- FALSE
-  }
+  htraits_args$cor <- cormat[screened_traits, screened_traits, drop = FALSE]
+  htraits_args$cor.numr <- FALSE
 
+  if (!requireNamespace("ASSET", quietly = TRUE)) {
+    stop("The ASSET package is required for multi-trait subset enumeration.")
+  }
   result <- do.call(ASSET::h.traits, htraits_args)
   qc <- make_fastasset_qc(
     snp, "PASS", "OK", "fastASSET completed.",
-    n_traits, valid_traits, traits.lab, positive_traits, negative_traits
+    n_traits, valid_traits, traits.lab, positive_traits, negative_traits,
+    screening_applied = TRUE,
+    analysis_scope = "SCREENED_SELECTION_ADJUSTED_TRAITS"
   )
 
   list(result = result, qc = qc)
@@ -415,6 +555,7 @@ extract_fastasset_meta <- function(fastasset_outcome) {
   if (is.null(result) || is.null(result$Meta)) return(NULL)
 
   meta_result <- result$Meta
+  analyzed_traits <- as.character(result$traits.lab)
   scalar <- function(x) {
     if (is.null(x) || length(x) == 0L) NA_real_ else as.numeric(x[1L])
   }
@@ -423,7 +564,10 @@ extract_fastasset_meta <- function(fastasset_outcome) {
     ID = qc$ID,
     status = qc$status,
     severity = qc$severity,
-    meta_scope = "SCREENED_SELECTION_ADJUSTED_TRAITS",
+    screening_applied = qc$screening_applied,
+    meta_scope = qc$analysis_scope,
+    n_analyzed_traits = as.integer(length(analyzed_traits)),
+    analyzed_traits = paste(analyzed_traits, collapse = ";"),
     p_meta = scalar(meta_result$pval),
     beta_meta_adjusted = scalar(meta_result$beta),
     se_meta_adjusted = scalar(meta_result$sd),
@@ -469,6 +613,8 @@ extract_fastasset_two_sided <- function(fastasset_outcome) {
     ID = qc$ID,
     status = qc$status,
     severity = qc$severity,
+    screening_applied = qc$screening_applied,
+    analysis_scope = qc$analysis_scope,
     p_two_sided = scalar(subset_result$pval),
     p_positive = scalar(subset_result$pval.1),
     p_negative = scalar(subset_result$pval.2),
