@@ -226,8 +226,15 @@ A trait is valid at a SNP only when BETA, SE and NEF are finite, `SE>0` and
 set to `NA`—are removed before screening or ASSET. The corresponding rows and
 columns are removed from the correlation matrix.
 
-If fewer than `--min-available-traits` remain, the SNP is not passed to ASSET
-and receives `INSUFFICIENT_VALID_TRAITS`.
+If no valid trait remains, the SNP receives `NO_VALID_TRAITS`. If the number
+remaining is below the user-configured `--min-available-traits`, it receives
+`INSUFFICIENT_VALID_TRAITS`.
+
+The default minimum is one. When exactly one valid trait remains, the pipeline
+matches the published analysis script: it bypasses pre-screening and ASSET
+enumeration and calculates the ordinary two-sided GWAS z-test P value. The row
+receives `SINGLE_VALID_TRAIT_NO_SCREEN`, `screening_applied=FALSE` and analysis
+scope `SINGLE_VALID_TRAIT_UNSCREENED`.
 
 ### 13. Transform and pre-screen
 
@@ -235,7 +242,11 @@ Valid effects are transformed using the prepared NEF values. Correlation
 blocks are orthogonalized, traits are pre-screened using `--scr-pthr`, and
 selected statistics are adjusted for that selection.
 
-If no trait passes, the SNP receives `NO_TRAIT_PASSED_SCREEN`.
+If no trait passes, the SNP receives `NO_TRAIT_PASSED_SCREEN`. If exactly one
+trait passes, ASSET enumeration is bypassed and the published closed-form
+two-sided test is applied to that trait's selection-adjusted z statistic. The
+row receives `SINGLE_TRAIT_AFTER_SCREEN`, `screening_applied=TRUE` and analysis
+scope `SINGLE_SCREENED_SELECTION_ADJUSTED_TRAIT`.
 
 ### 14. Split directions and run ASSET
 
@@ -248,14 +259,17 @@ If either side exceeds `--max-traits-per-side`, the SNP is not sent to
 exhaustive subset enumeration and receives `DIRECTION_LIMIT_EXCEEDED`. It is
 also written to the dedicated direction-limit report with the SNP ID, positive
 and negative screened counts, configured limit, screening threshold and
-continuation action. Other SNPs continue to be analyzed.
+continuation action. Other SNPs continue to be analyzed. This record, exclude
+and continue behavior reproduces the released genome-wide analysis script.
 
-Otherwise the package calls `ASSET::h.traits()` with `side=2`, `search=2` and
-`meta=TRUE` by default. The directional result and Meta result are extracted
-directly from the ASSET object.
+For two or more screened traits, the package calls `ASSET::h.traits()` with
+`side=2`, `search=2` and `meta=TRUE` by default. The directional result and
+Meta result are extracted directly from the ASSET object.
 
 Meta is the fixed-effect result for the screened, selection-adjusted traits. It
-is not a conventional meta-analysis of every original trait.
+is not a conventional meta-analysis of every original trait. Single-trait rows
+receive an equivalent one-trait Meta record using either the unscreened or
+selection-adjusted statistic identified by `meta_scope`.
 
 ### 15. Combine outputs and apply the exit policy
 
@@ -265,8 +279,11 @@ even when it has no result row.
 | QC status | Severity | Meaning |
 |---|---|---|
 | `PASS` | `OK` | FastASSET completed |
+| `SINGLE_VALID_TRAIT_NO_SCREEN` | `OK` | One valid trait was tested with its ordinary two-sided GWAS z statistic |
+| `SINGLE_TRAIT_AFTER_SCREEN` | `OK` | One screened trait was tested with its selection-adjusted z statistic |
+| `NO_VALID_TRAITS` | `WARNING` | No structurally valid trait observation remained |
 | `NO_TRAIT_PASSED_SCREEN` | `INFO` | No valid trait passed pre-screening |
-| `INSUFFICIENT_VALID_TRAITS` | `WARNING` | Too few valid traits remained |
+| `INSUFFICIENT_VALID_TRAITS` | `WARNING` | Valid traits remained, but fewer than the user-configured minimum |
 | `DIRECTION_LIMIT_EXCEEDED` | `HIGH` | Positive or negative screened count exceeded the guard |
 | `ASSET_ERROR` | `CRITICAL` | The per-SNP ASSET call failed |
 
@@ -352,7 +369,9 @@ reused; changes create a new directory instead of mixing incompatible results.
    `DIRECTION_LIMIT_EXCEEDED` and `ASSET_ERROR` rows.
 5. Interpret `*_fastasset_results.tsv.gz` only after confirming acceptable QC
    completeness.
-6. Interpret `*_fastasset_meta.tsv.gz` as screened, selection-adjusted Meta—not
-   as all-trait conventional meta-analysis.
+6. Interpret `*_fastasset_meta.tsv.gz` using `meta_scope`,
+   `n_analyzed_traits` and `analyzed_traits`. Multi-trait rows are screened,
+   selection-adjusted Meta—not all-trait conventional meta-analysis; one-trait
+   rows are explicitly labeled as unscreened or selection-adjusted.
 
 [Return to the main README](../../README.md)

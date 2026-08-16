@@ -221,10 +221,12 @@ orientation.
 | Incompatible pair | Set BETA, SE and NEF to `NA` for that trait at that SNP and record the failure |
 
 Incompatible observations are saved in
-`fastasset_failed_allele_alignments.tsv`. Before ASSET is called, invalid or
+`fastasset_failed_allele_alignments.tsv`. Before screening or ASSET, invalid or
 missing trait observations are removed and the correlation matrix is subset to
-the remaining traits. If fewer than `--min-available-traits` remain, the SNP is
-not tested and receives `INSUFFICIENT_VALID_TRAITS` in QC.
+the remaining traits. With the default `--min-available-traits 1`, a SNP with
+one valid trait follows the published closed-form two-sided z test without
+screening. Setting the minimum to 2 instead records
+`INSUFFICIENT_VALID_TRAITS` for such a SNP.
 
 ## Recommended settings for 200–250 traits
 
@@ -235,7 +237,7 @@ not tested and receives `INSUFFICIENT_VALID_TRAITS` in QC.
 --chunk-size 1000
 --scr-pthr 0.05
 --max-traits-per-side 16
---min-available-traits 2
+--min-available-traits 1
 --include-meta TRUE
 ```
 
@@ -252,8 +254,8 @@ count to `((traits+1)*(traits+2)/2)+1`. Munging can use multiple workers, but
 | Output | Purpose |
 |---|---|
 | `*_fastasset_results.tsv.gz` | Positive/negative directional subset results |
-| `*_fastasset_meta.tsv.gz` | ASSET fixed-effect Meta result for screened, selection-adjusted traits |
-| `*_fastasset_qc.tsv.gz` | Per-SNP status, severity, valid/invalid traits, direction counts and runtime |
+| `*_fastasset_meta.tsv.gz` | Fixed-effect Meta output for multi-trait ASSET rows and the one-trait closed-form equivalent |
+| `*_fastasset_qc.tsv.gz` | Per-SNP status, severity, screening flag, analysis scope, valid/invalid traits, direction counts and runtime |
 | `*_direction_limit_exceeded.tsv.gz` | SNPs skipped because the screened-trait guard was exceeded; analysis continues for other SNPs |
 | `*_fastasset_summary.tsv` | Counts by QC status and severity |
 | `manifest_ldsc_trait_match.tsv` | Common traits and traits missing from either the manifest or LDSC, with retained analysis order |
@@ -275,7 +277,7 @@ If dependencies are already installed:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.4.9.tar.gz
+R CMD INSTALL release/fastASSETcli_0.5.0.tar.gz
 ```
 
 ## Scientific behavior in one place
@@ -285,9 +287,14 @@ R CMD INSTALL release/fastASSETcli_0.4.9.tar.gz
   are excluded with warnings and an audit record.
 - GenomicSEM `$I` is loaded or generated, then normalized as
   `D^(-1/2) I D^(-1/2)` and checked for positive definiteness.
-- ASSET is called with `side=2`, `search=2` and `meta=TRUE` by default.
-- Meta output contains screened, selection-adjusted traits; it is not an
-  ordinary fixed-effect meta-analysis of every original trait.
+- With one valid trait before screening, the published ordinary two-sided GWAS
+  z test is used. With one trait after screening, the published closed-form
+  test uses its selection-adjusted z statistic. ASSET enumeration is bypassed
+  in both cases.
+- For two or more screened traits, ASSET is called with `side=2`, `search=2`
+  and `meta=TRUE` by default.
+- Multi-trait Meta output contains screened, selection-adjusted traits; it is
+  not an ordinary fixed-effect meta-analysis of every original trait.
 - The primary guard remains 16 screened traits per direction.
 
 See the [complete workflow](inst/docs/WORKFLOW.md) for the step-by-step logic
@@ -296,7 +303,7 @@ scientific rationale and severity of each correction.
 
 ## Release archive
 
-`release/fastASSETcli_0.4.9.tar.gz` is the current installable source archive.
+`release/fastASSETcli_0.5.0.tar.gz` is the current installable source archive.
 Earlier archives remain available for reproducibility.
 
 ## Upstream terms

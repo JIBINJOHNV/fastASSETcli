@@ -57,8 +57,9 @@ fastasset_cli_help <- function() {
     "  --scr-pthr NUMBER            Pre-screening P threshold [0.05]\n",
     "  --max-traits-per-side INT    Screened-trait guard per direction [16];\n",
     "                                exceeded SNPs are reported and skipped\n",
-    "  --min-available-traits INT   Minimum valid traits per SNP [2]\n",
-    "  --cor-thr NUMBER             Correlation-block threshold [0.2]\n",
+    "  --min-available-traits INT   Minimum valid traits per SNP [1]; one trait\n",
+    "                                uses the published closed-form z test\n",
+    "  --cor-thr NUMBER             Correlation-block threshold in [0,1) [0.2]\n",
     "  --meth-pval DLM|IS|B         ASSET P-value method [DLM]\n",
     "  --include-meta TRUE|FALSE    Write screened fixed-effect Meta [TRUE]\n",
     "  --eigen-tolerance NUMBER     Positive-definite tolerance [1e-8]\n\n",
@@ -301,7 +302,7 @@ parse_fastasset_cli <- function(arguments) {
       get_value("max-traits-per-side", "16"), "--max-traits-per-side"
     ),
     min_available_traits = parse_integer(
-      get_value("min-available-traits", "2"), "--min-available-traits"
+      get_value("min-available-traits", "1"), "--min-available-traits"
     ),
     cor_thr = parse_number(get_value("cor-thr", "0.2"), "--cor-thr"),
     meth_pval = toupper(get_value("meth-pval", "DLM")),
@@ -424,8 +425,8 @@ validate_cli_params <- function(params) {
   if (params$scr_pthr <= 0 || params$scr_pthr >= 1) {
     stop("--scr-pthr must be strictly between 0 and 1.", call. = FALSE)
   }
-  if (params$cor_thr <= 0 || params$cor_thr >= 1) {
-    stop("--cor-thr must be strictly between 0 and 1.", call. = FALSE)
+  if (params$cor_thr < 0 || params$cor_thr >= 1) {
+    stop("--cor-thr must be in [0, 1).", call. = FALSE)
   }
   if (params$eigen_tolerance <= 0) {
     stop("--eigen-tolerance must be greater than zero.", call. = FALSE)

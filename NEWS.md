@@ -1,3 +1,27 @@
+# fastASSETcli 0.5.0
+
+- Match the published genome-wide analysis for single-trait cases. A SNP with
+  one valid trait bypasses screening and uses its original two-sided GWAS z
+  test; a SNP with one trait remaining after screening uses the corresponding
+  selection-adjusted z test. Neither path invokes ASSET's DLM machinery.
+- Changed the default `--min-available-traits` from 2 to 1. Users can still set
+  2 to enforce a multi-trait-only policy.
+- Added `SINGLE_VALID_TRAIT_NO_SCREEN`, `SINGLE_TRAIT_AFTER_SCREEN` and
+  `NO_VALID_TRAITS` QC statuses, together with `screening_applied` and
+  `analysis_scope` provenance in result, Meta and QC tables.
+- Confirmed that `DIRECTION_LIMIT_EXCEEDED` reproduces the published
+  genome-wide behavior: record the SNP, exclude it from ASSET enumeration and
+  continue analyzing subsequent SNPs.
+- Aligned the CLI with `create_blocks()` by accepting `--cor-thr` in `[0, 1)`.
+- Added regression coverage for published single-trait formulas, the
+  multi-trait standardization path, exact-zero direction assignment, the
+  16-trait guard boundary, independent-path underflow, Meta invariance and the
+  missing-Neff-standardization behavior in the ASSET repository copy.
+- Expanded the reference comparison across the README tutorial, standalone
+  fastASSET package, published analysis script, ASSET fastASSET copy and
+  `ASSET::h.traits2`. The normalized LDSC covariance remains the scientific
+  default and matches the released paper analysis.
+
 # fastASSETcli 0.4.9
 
 - Name converted VCF/BCF tables and metadata with both the zero-padded manifest

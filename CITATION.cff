@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this workflow, cite fastASSET, ASSET, and this software."
 title: "fastASSETcli"
 type: software
-version: 0.4.9
+version: 0.5.0
 authors:
   - family-names: "John"
     given-names: "Jibin"
