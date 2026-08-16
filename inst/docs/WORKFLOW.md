@@ -1,8 +1,8 @@
 # Complete fastASSETcli workflow
 
 This page describes the complete processing order from the CLI command to the
-final FastASSET, Meta and QC files. The manifest is the only summary-statistics
-input. The pipeline does not accept or require a separately created
+final FastASSET, Meta, QC and audit files. The manifest is the only
+summary-statistics input. The pipeline does not accept or require a separately created
 `--fastasset-input` file.
 
 [Return to the main README](../../README.md)
@@ -12,8 +12,13 @@ input. The pipeline does not accept or require a separately created
 ```mermaid
 flowchart TD
     A["Run fastasset with CLI options"] --> B["Validate required paths, values and mode"]
-    B --> C["Read manifest in canonical trait order"]
-    C --> D{"Input file type"}
+    B --> C["Read manifest"]
+    C --> C1{"Existing LDSC object supplied?"}
+    C1 -->|"Yes"| C2["Load I; take native trait order from S"]
+    C2 --> C3["Compare LDSC and manifest; warn and audit missing traits"]
+    C3 --> C4["Keep common traits in manifest order; subset manifest rows and both I axes"]
+    C1 -->|"No"| D
+    C4 --> D{"Input file type"}
     D -->|"VCF or BCF"| E["Validate sample and FORMAT fields"]
     E --> F["Convert with bcftools and derive P, alleles, N and prevalence"]
     D -->|"Tabular"| G["Read and map required columns"]
@@ -27,9 +32,8 @@ flowchart TD
     K --> M
     L --> M
     M --> N{"Existing LDSC object supplied?"}
-    N -->|"Yes"| O["Load GenomicSEM object and recover trait labels"]
+    N -->|"Yes"| Q["Use the preloaded common-trait I matrix"]
     N -->|"No"| P["Munge each trait, run GenomicSEM LDSC and save object"]
-    O --> Q["Reorder both axes of intercept covariance I"]
     P --> Q
     Q --> R["Normalize I to correlation and validate positive definiteness"]
     R --> S["Create correlation blocks and signature-addressed SNP chunks"]
@@ -41,7 +45,7 @@ flowchart TD
     X -->|"No"| Y["QC: NO_TRAIT_PASSED_SCREEN"]
     X -->|"Yes"| Z["Split non-negative and negative adjusted effects"]
     Z --> AA{"Direction guard exceeded?"}
-    AA -->|"Yes"| AB["QC: DIRECTION_LIMIT_EXCEEDED"]
+    AA -->|"Yes"| AB["Report SNP in dedicated direction-limit file and continue"]
     AA -->|"No"| AC["Run ASSET side=2, search=2 and optional Meta"]
     AC --> AD["QC: PASS or ASSET_ERROR"]
     V --> AE["Combine chunks and write final outputs"]
@@ -67,15 +71,23 @@ duplicated options are rejected.
 
 ### 2. Read and validate the manifest
 
-The manifest must contain one unique row per trait and readable paths. Its row
-order becomes the canonical trait order for:
+The manifest must contain one unique row per trait and readable paths. In
+existing-LDSC mode, the package loads the LDSC object before converting any
+summary-statistic files. It uses the native GenomicSEM `$S` trait names to
+label `$I`, compares those names with the manifest, warns about traits missing
+from either source, and writes a complete match audit. Only common traits are
+retained. Their manifest rows—including VCF `SAMPLE` and file information—and
+both `$I` axes are subset to the common set in manifest order.
+
+The resulting common-trait manifest order becomes canonical for:
 
 - columns in the prepared FastASSET table;
 - both axes of the LDSC intercept covariance matrix; and
 - every downstream trait-indexed result.
 
-The same manifest supports tabular and VCF/BCF inputs. A file can be repeated
-only for distinct, explicitly named samples in a multi-sample VCF/BCF.
+At least two common traits must remain. The same manifest supports tabular and
+VCF/BCF inputs. A file can be repeated only for distinct, explicitly named
+samples in a multi-sample VCF/BCF.
 
 ### 3. Convert VCF/BCF inputs when present
 
@@ -100,6 +112,10 @@ The standardized representation uses:
 For a binary VCF, one sample prevalence is calculated as
 `median(NC)/(median(NC)+median(NCO))`. Header totals are retained as provenance
 and are not substituted for the per-SNP counts.
+
+No additional MAF, INFO, MHC, population-frequency or palindromic-SNP QC filter
+is applied during conversion. The builder enforces only the structural and
+numeric requirements needed to construct the LDSC and FastASSET inputs.
 
 ### 4. Read tabular inputs
 
@@ -160,10 +176,13 @@ manifest, provenance and completion signature.
 
 ### 9. Obtain the LDSC intercept covariance
 
-In existing-LDSC mode, the package loads `.RData`, `.rda` or `.rds`, extracts
-the requested object and requires a matrix `$I`. Trait labels are recovered
-from matching dimnames in `I`, `S` or `S_Stand` and both axes are reordered to
-the manifest order.
+In existing-LDSC mode, this has already happened before input conversion. The
+package loaded `.RData`, `.rda` or `.rds`, extracted the requested object,
+required matrix `$I`, and used `$S` column names as the canonical native
+GenomicSEM trait order. If needed for non-native objects, usable matrix
+dimnames are defensive fallbacks. It retained the manifest/LDSC intersection,
+ordered both `$I` axes to common-trait manifest order, and excluded unmatched
+manifest rows before VCF sample selection or tabular reading.
 
 In automatic-LDSC mode, the package:
 
@@ -193,7 +212,7 @@ Traits are grouped using `--cor-thr`. The prepared SNP table is divided into
 macOS. Subset enumeration within one SNP remains sequential.
 
 Completed chunks are reusable. A chunk is considered complete only when its
-result, Meta, QC and completion files all exist.
+result, Meta, QC, direction-limit report and completion files all exist.
 
 ### 12. Validate traits separately at each SNP
 
@@ -221,7 +240,10 @@ Screened traits are split exactly as in the two-sided ASSET search:
 - negative side: adjusted BETA less than zero.
 
 If either side exceeds `--max-traits-per-side`, the SNP is not sent to
-exhaustive subset enumeration and receives `DIRECTION_LIMIT_EXCEEDED`.
+exhaustive subset enumeration and receives `DIRECTION_LIMIT_EXCEEDED`. It is
+also written to the dedicated direction-limit report with the SNP ID, positive
+and negative screened counts, configured limit, screening threshold and
+continuation action. Other SNPs continue to be analyzed.
 
 Otherwise the package calls `ASSET::h.traits()` with `side=2`, `search=2` and
 `meta=TRUE` by default. The directional result and Meta result are extracted
@@ -248,6 +270,11 @@ are written. This is controlled by `--fail-on-critical`. HIGH exclusions are
 reported but do not make the command fail unless `--fail-on-high TRUE` is used.
 
 ## Output directory structure
+
+The root output directory contains
+`<run-name>_manifest_ldsc_trait_match.tsv`. It is written before summary-file
+preparation in existing-LDSC mode, so excluded manifest and LDSC traits remain
+auditable even if a later input file fails.
 
 ### Prepared input
 
@@ -290,7 +317,9 @@ This directory exists only when `--ldsc-rdata` is omitted.
 ├── <run-name>_fastasset_results.tsv.gz
 ├── <run-name>_fastasset_meta.tsv.gz
 ├── <run-name>_fastasset_qc.tsv.gz
+├── <run-name>_direction_limit_exceeded.tsv.gz
 ├── <run-name>_fastasset_summary.tsv
+├── manifest_ldsc_trait_match.tsv
 ├── ldsc_intercept_I_reordered.tsv.gz
 ├── ldsc_trait_order_audit.tsv
 ├── trait_correlation_normalized.tsv.gz
@@ -310,10 +339,12 @@ reused; changes create a new directory instead of mixing incompatible results.
 
 1. Check `fastasset_input_build_audit.tsv` and
    `fastasset_failed_allele_alignments.tsv`.
-2. Check `ldsc_trait_order_audit.tsv` and
+2. Check `<run-name>_manifest_ldsc_trait_match.tsv`,
+   `ldsc_trait_order_audit.tsv` and
    `trait_correlation_normalized.tsv.gz`.
 3. Read `*_fastasset_summary.tsv` and the complete per-SNP QC file.
-4. Confirm the number of `DIRECTION_LIMIT_EXCEEDED` and `ASSET_ERROR` rows.
+4. Inspect `*_direction_limit_exceeded.tsv.gz` and confirm the number of
+   `DIRECTION_LIMIT_EXCEEDED` and `ASSET_ERROR` rows.
 5. Interpret `*_fastasset_results.tsv.gz` only after confirming acceptable QC
    completeness.
 6. Interpret `*_fastasset_meta.tsv.gz` as screened, selection-adjusted Meta—not

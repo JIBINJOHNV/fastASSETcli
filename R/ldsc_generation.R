@@ -76,8 +76,41 @@ coerce_manifest_text <- function(values) {
   text
 }
 
-read_ldsc_manifest <- function(path, analysis_traits = NULL) {
+read_ldsc_manifest_trait_names <- function(path) {
+  manifest <- data.table::fread(
+    path,
+    na.strings = c("", "NA", "N/A", "NULL", "."),
+    check.names = FALSE
+  )
+  if (nrow(manifest) == 0L) stop("The LDSC manifest has no trait rows.")
+
+  headers <- normalize_manifest_header(names(manifest))
+  if (anyDuplicated(headers)) {
+    stop("The LDSC manifest has duplicate normalized column names.")
+  }
+  trait_column <- find_manifest_column(
+    headers, c("TRAIT", "NAME", "TRAIT_NAME"), "TRAIT", required = TRUE
+  )
+  traits <- trimws(as.character(manifest[[trait_column]]))
+  if (anyNA(traits) || any(!nzchar(traits))) {
+    stop("Every LDSC manifest TRAIT value must be non-empty.")
+  }
+  if (anyDuplicated(traits)) {
+    stop(
+      "Duplicate LDSC manifest trait(s): ",
+      paste(unique(traits[duplicated(traits)]), collapse = ", "), "."
+    )
+  }
+  traits
+}
+
+read_ldsc_manifest <- function(path, analysis_traits = NULL,
+                               retain_traits = NULL) {
   if (!is.null(analysis_traits)) analysis_traits <- as.character(analysis_traits)
+  if (!is.null(retain_traits)) retain_traits <- as.character(retain_traits)
+  if (!is.null(analysis_traits) && !is.null(retain_traits)) {
+    stop("Use only one of analysis_traits or retain_traits.")
+  }
   manifest <- data.table::fread(
     path,
     na.strings = c("", "NA", "N/A", "NULL", "."),
@@ -120,6 +153,23 @@ read_ldsc_manifest <- function(path, analysis_traits = NULL) {
       "Duplicate LDSC manifest trait(s): ",
       paste(unique(traits[duplicated(traits)]), collapse = ", "), "."
     )
+  }
+
+  if (!is.null(retain_traits)) {
+    if (length(retain_traits) == 0L || anyNA(retain_traits) ||
+        any(!nzchar(retain_traits)) || anyDuplicated(retain_traits)) {
+      stop("retain_traits must contain unique, non-empty trait names.")
+    }
+    missing_retained <- setdiff(retain_traits, traits)
+    if (length(missing_retained) > 0L) {
+      stop(
+        "Requested retained trait(s) are absent from the manifest: ",
+        paste(missing_retained, collapse = ", "), "."
+      )
+    }
+    retained_rows <- match(retain_traits, traits)
+    manifest <- manifest[retained_rows]
+    traits <- traits[retained_rows]
   }
 
   if (!is.null(analysis_traits)) {

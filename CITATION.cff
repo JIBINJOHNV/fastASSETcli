@@ -2,13 +2,13 @@ cff-version: 1.2.0
 message: "If you use this workflow, cite fastASSET, ASSET, and this software."
 title: "fastASSETcli"
 type: software
-version: 0.4.6
+version: 0.4.7
 authors:
   - family-names: "John"
     given-names: "Jibin"
 repository-code: "https://github.com/JIBINJOHNV/fastASSETcli"
 url: "https://github.com/JIBINJOHNV/fastASSETcli"
-date-released: 2026-08-15
+date-released: 2026-08-16
 references:
   - type: software
     title: "fastASSET"

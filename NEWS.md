@@ -1,3 +1,19 @@
+# fastASSETcli 0.4.7
+
+- In existing-LDSC mode, compare manifest traits with the native GenomicSEM
+  trait order from `colnames(LDSCoutput$S)` before processing summary files.
+- Keep only common traits, preserve their manifest order, subset manifest rows
+  and VCF SAMPLE values consistently, and reorder both `$I` axes accordingly.
+  Excluded rows are removed before their file paths or samples are validated.
+- Warn separately for traits missing from LDSC and traits missing from the
+  manifest, and write `manifest_ldsc_trait_match.tsv` with the complete audit.
+- Write every `DIRECTION_LIMIT_EXCEEDED` SNP to the dedicated
+  `*_direction_limit_exceeded.tsv.gz` file while continuing with other SNPs.
+- Added regression tests for common-trait ordering, sample-row subsetting and
+  dedicated direction-limit records.
+- No additional scientific QC filters were added; upstream-QC-completed input
+  is used subject only to structural requirements needed for valid analysis.
+
 # fastASSETcli 0.4.6
 
 - Made every temporary `bcftools query` table self-describing by writing one

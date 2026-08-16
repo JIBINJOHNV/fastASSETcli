@@ -431,7 +431,7 @@ manifest_input_signature <- function(params, manifest) {
     )
   }
   make_text_signature(c(
-    "manifest_input_version=2026-08-15-v4-recoverable-allele-failures",
+    "manifest_input_version=2026-08-16-v5-common-ldsc-traits",
     paste0("traits=", paste(manifest[["trait"]], collapse = ";")),
     paste0("source_format=", paste(manifest[["source_format"]], collapse = ";")),
     paste0("vcf_sample=", paste(manifest[["vcf_sample"]], collapse = ";")),
@@ -455,8 +455,12 @@ read_preparation_provenance <- function(path) {
   stats::setNames(as.list(table[["value"]]), table[["parameter"]])
 }
 
-prepare_manifest_analysis_input <- function(params) {
-  manifest <- read_ldsc_manifest(params$sumstats_manifest)
+prepare_manifest_analysis_input <- function(params, manifest = NULL) {
+  if (is.null(manifest)) {
+    manifest <- read_ldsc_manifest(params$sumstats_manifest)
+  } else {
+    manifest <- data.table::copy(manifest)
+  }
   signature <- manifest_input_signature(params, manifest)
   preparation_dir <- file.path(
     params$output_dir, paste0(params$run_name, "_prepared_input_", signature)
