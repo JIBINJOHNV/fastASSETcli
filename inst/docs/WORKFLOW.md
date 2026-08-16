@@ -93,6 +93,11 @@ samples in a multi-sample VCF/BCF.
 
 VCF/BCF files are converted in parallel with `bcftools`. A one-sample VCF is
 selected automatically; multi-sample VCFs require the exact manifest `SAMPLE`.
+Each converted table, metadata file, and in-progress `bcftools-query`/stderr
+file contains both the zero-padded manifest order and a filesystem-safe trait
+label. For example, trait 2 named `ANXA1_P04083` is written with the stem
+`trait_0002_ANXA1_P04083`. The original trait name remains unchanged in the
+resolved manifest and all scientific outputs.
 
 The standardized representation uses:
 
@@ -288,8 +293,8 @@ auditable even if a later input file fails.
 ├── input_preparation_provenance.tsv
 ├── input_preparation.complete
 └── vcf_converted/                     # only when VCF/BCF inputs exist
-    ├── trait_0001.tsv.gz
-    └── trait_0001.metadata.tsv
+    ├── trait_0001_<trait-name>.tsv.gz
+    └── trait_0001_<trait-name>.metadata.tsv
 ```
 
 `fastasset_failed_allele_alignments.tsv` is always created. It contains only a

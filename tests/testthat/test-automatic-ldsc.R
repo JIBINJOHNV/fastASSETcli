@@ -528,6 +528,34 @@ test_that("bcftools creates an audited LDSC table from GWAS-VCF", {
   expect_equal(analysis$table$NEF, 90)
 })
 
+test_that("VCF conversion filenames include safe manifest trait names", {
+  manifest <- data.table::data.table(
+    order = c(2L, 9L),
+    trait = c(
+      "ANXA1_P04083_OID30617_v1_Inflammation_II",
+      "Trait / unsafe:* name"
+    )
+  )
+  paths <- fastASSETcli:::vcf_conversion_paths(
+    manifest, rows = seq_len(nrow(manifest)), conversion_dir = "/converted"
+  )
+
+  expect_identical(
+    basename(paths$output),
+    c(
+      "trait_0002_ANXA1_P04083_OID30617_v1_Inflammation_II.tsv.gz",
+      "trait_0009_Trait_unsafe_name.tsv.gz"
+    )
+  )
+  expect_identical(
+    basename(paths$metadata),
+    c(
+      "trait_0002_ANXA1_P04083_OID30617_v1_Inflammation_II.metadata.tsv",
+      "trait_0009_Trait_unsafe_name.metadata.tsv"
+    )
+  )
+})
+
 test_that("generated LDSC matrices receive exact two-axis names", {
   object <- list(I = diag(2), S = diag(2))
   named <- fastASSETcli:::add_ldsc_dimnames(object, c("trait_a", "trait_b"))

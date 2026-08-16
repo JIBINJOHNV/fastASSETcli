@@ -1,3 +1,13 @@
+# fastASSETcli 0.4.9
+
+- Name converted VCF/BCF tables and metadata with both the zero-padded manifest
+  order and a filesystem-safe manifest trait label, for example
+  `trait_0002_ANXA1_P04083_OID30617_v1_Inflammation_II.tsv.gz`.
+- Apply the same informative stem to in-progress `bcftools-query` and stderr
+  files, so every parallel worker can be linked to its trait while running.
+- Updated the prepared-input cache signature so an earlier cache containing
+  numeric-only VCF-conversion filenames is not reused.
+
 # fastASSETcli 0.4.8
 
 - Import `data.table` in `NAMESPACE`, making the installed package explicitly
