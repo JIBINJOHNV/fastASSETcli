@@ -348,6 +348,12 @@ test_that("VCF conversion applies allele, P, N and prevalence rules", {
   expect_equal(binary$p_values_capped, 1)
   expect_identical(binary$table$A1, query$ALT)
   expect_identical(binary$table$A2, query$REF)
+  expect_equal(binary$table$AF, query$AF)
+  expect_false("MAF" %in% names(binary$table))
+  expect_identical(
+    binary$table$FASTASSET_ID,
+    c("1_100_A_G", "1_200_C_T", "1_300_G_A")
+  )
 
   quantitative <- fastASSETcli:::standardize_vcf_query_table(
     query[, setdiff(names(query), c("NC", "NCO")), with = FALSE],
@@ -389,7 +395,138 @@ test_that("VCF valid-row filtering is independent of the input table class", {
   expect_equal(converted$output_rows, 1L)
   expect_equal(converted$dropped_rows, 1L)
   expect_identical(converted$table$SNP, "rs569167217")
+  expect_identical(converted$table$FASTASSET_ID, "10_60684_A_C")
   expect_equal(converted$table$N, 32867)
+})
+
+test_that("duplicate VCF rsIDs are retained under distinct FastASSET IDs", {
+  query <- data.table::data.table(
+    CHR = c("chr1", "chr1", "2"),
+    POS = c(100, 100, 200),
+    SNP = c("rsMulti", "rsMulti", "."),
+    REF = c("A", "A", "C"),
+    ALT = c("G", "C", "T"),
+    ES = c(0.2, -0.1, 0.3),
+    SE = c(0.05, 0.04, 0.06),
+    LP = c(2, 1, 3),
+    AF = c(0.2, 0.3, 0.4),
+    NEF = c(100, 100, 100)
+  )
+
+  converted <- fastASSETcli:::standardize_vcf_query_table(
+    query,
+    binary = FALSE,
+    supplied_sample_prev = NA_real_,
+    source_file = "multiallelic.vcf.gz"
+  )
+
+  expect_identical(converted$table$SNP[1:2], c("rsMulti", "rsMulti"))
+  expect_true(is.na(converted$table$SNP[3L]))
+  expect_identical(
+    converted$table$FASTASSET_ID,
+    c("1_100_A_G", "1_100_A_C", "2_200_C_T")
+  )
+})
+
+test_that("automatic VCF munge mapping sends effect AF to GenomicSEM", {
+  expect_identical(
+    fastASSETcli:::vcf_munge_column_map(FALSE),
+    list(
+      SNP = "SNP", A1 = "A1", A2 = "A2", effect = "BETA",
+      P = "P", N = "N", MAF = "AF"
+    )
+  )
+  expect_identical(
+    fastASSETcli:::vcf_munge_column_map(TRUE)$INFO,
+    "INFO"
+  )
+})
+
+test_that("VCF FastASSET merge uses encoded IDs without allele reconciliation", {
+  reference <- data.table::data.table(
+    ID = "1_100_A_G", A1 = "G", A2 = "A",
+    Beta = 0.2, SE = 0.05, NEF = 100
+  )
+  master <- fastASSETcli:::append_fastasset_trait(
+    NULL, reference, "trait_a", allele_encoded_id = TRUE
+  )$master
+  deliberately_inconsistent <- data.table::data.table(
+    ID = "1_100_A_G", A1 = "T", A2 = "C",
+    Beta = 0.3, SE = 0.06, NEF = 200
+  )
+  appended <- fastASSETcli:::append_fastasset_trait(
+    master, deliberately_inconsistent, "trait_b", allele_encoded_id = TRUE
+  )
+
+  expect_equal(appended$skipped_allele_checks, 1L)
+  expect_equal(appended$incompatible_matches, 0L)
+  expect_equal(appended$master[["trait_b.Beta"]], 0.3)
+  expect_equal(nrow(appended$failed_alignments), 0L)
+})
+
+test_that("VCF FastASSET build writes the canonical-to-rsID map", {
+  directory <- tempfile("vcf_fastasset_id_test_")
+  dir.create(directory)
+  prepared_a <- file.path(directory, "trait_a.tsv.gz")
+  prepared_b <- file.path(directory, "trait_b.tsv.gz")
+  common_columns <- function(snp, id, chr, pos, ref, alt, beta) {
+    data.table::data.table(
+      SNP = snp, FASTASSET_ID = id, A1 = alt, A2 = ref,
+      BETA = beta, SE = 0.05, P = 0.01, N = 100,
+      CHR = chr, POS = pos, LP = 2, AF = 0.2, NEF = 100
+    )
+  }
+  data.table::fwrite(
+    common_columns(
+      c("rsMulti", "rsMulti"),
+      c("1_100_A_G", "1_100_A_C"),
+      c("1", "1"), c(100, 100), c("A", "A"), c("G", "C"),
+      c(0.2, -0.1)
+    ),
+    prepared_a, sep = "\t", compress = "gzip"
+  )
+  data.table::fwrite(
+    common_columns(
+      "rsMulti", "1_100_A_G", "1", 100, "A", "G", 0.3
+    ),
+    prepared_b, sep = "\t", compress = "gzip"
+  )
+  manifest <- data.table::data.table(
+    order = 1:2,
+    trait = c("trait_a", "trait_b"),
+    source_file = c("trait_a.vcf.gz", "trait_b.vcf.gz"),
+    file = c(prepared_a, prepared_b),
+    source_format = c("VCF", "VCF"),
+    N = c(NA_real_, NA_real_),
+    sample_prev = c(NA_real_, NA_real_),
+    population_prev = c(NA_real_, NA_real_)
+  )
+  wide_file <- file.path(directory, "wide.tsv.gz")
+  audit_file <- file.path(directory, "audit.tsv")
+  allele_file <- file.path(directory, "alleles.tsv.gz")
+  failed_file <- file.path(directory, "failed.tsv")
+  map_file <- file.path(directory, "variant_map.tsv.gz")
+
+  built <- fastASSETcli:::build_manifest_fastasset_input(
+    manifest, list(munge_column_map = list()), wide_file, audit_file,
+    allele_file, failed_file, map_file
+  )
+  wide <- data.table::fread(built$path)
+  mapping <- data.table::fread(built$variant_map_file)
+  audit <- data.table::fread(audit_file)
+
+  expect_identical(wide$ID, c("1_100_A_C", "1_100_A_G"))
+  expect_equal(wide[["trait_b.Beta"]][wide$ID == "1_100_A_G"], 0.3)
+  expect_equal(nrow(mapping), 3L)
+  expect_identical(
+    names(mapping), c("trait", "FASTASSET_ID", "RSID", "CHR", "POS", "REF", "ALT")
+  )
+  expect_true(all(mapping$RSID == "rsMulti"))
+  expect_equal(built$n_failed_alignments, 0L)
+  expect_equal(
+    audit$allele_checks_skipped_id_encodes_ref_alt[audit$trait == "trait_b"],
+    1L
+  )
 })
 
 test_that("header-aware bcftools query parsing validates canonical names", {

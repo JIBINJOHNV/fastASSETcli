@@ -12,7 +12,8 @@ The package can:
 - read tabular summary statistics or GWAS-VCF/BCF files;
 - use an existing GenomicSEM LDSC object or generate one automatically;
 - process quantitative and binary traits using the required sample-size rules;
-- align effects across traits without requiring `--fastasset-input`;
+- merge VCF traits on allele-encoded IDs and align tabular effects without
+  requiring `--fastasset-input`;
 - run the positive/negative FastASSET search and ASSET Meta analysis; and
 - resume compatible preparation, LDSC and analysis outputs.
 
@@ -197,22 +198,45 @@ manifest preserves the original, unsanitized trait name.
 
 GWAS-VCF fields are interpreted as follows:
 
+- `SNP=VCF ID` for GenomicSEM munging; repeated rsIDs are retained;
+- `FASTASSET_ID=CHR_POS_REF_ALT` after chromosome and allele normalization;
 - `A1=ALT`, `A2=REF` and `BETA=FORMAT/ES`;
 - `P=10^(-FORMAT/LP)`, with unrepresentably small values capped at the smallest
   positive R double;
-- `MAF=min(FORMAT/AF, 1-FORMAT/AF)`;
+- `AF=FORMAT/AF`; automatic munging maps this allele-frequency column to
+  GenomicSEM's `MAF` input role;
 - `INFO=FORMAT/SI` when present; and
 - a VCF declaring `StudyType=CaseControl` requires `POPULATION_PREV`.
+
+The two identifiers serve different branches. `GenomicSEM::munge()` receives
+the original `SNP`/rsID and performs HapMap3 ID-and-allele matching. The
+FastASSET-wide table uses `FASTASSET_ID`, so multiallelic records that share an
+rsID remain distinct. Missing VCF IDs are permitted: those rows can still enter
+FastASSET through `FASTASSET_ID`, while munging decides whether they match its
+reference. The converter does not pre-deduplicate rsIDs.
+
+Each converted file is self-describing. Its columns are written in this order
+(optional fields appear only when available):
+
+```text
+SNP  FASTASSET_ID  A1  A2  BETA  SE  P  N  [INFO]  CHR  POS  LP  AF  [SS]  [NC  NCO]  [NEF]
+```
 
 The converter does not introduce additional MAF, INFO, MHC, population-AF or
 palindromic-variant QC thresholds. Input is assumed to have completed the
 user's scientific QC. Structural requirements needed to calculate valid
 statistics are still enforced.
 
-### Cross-trait allele alignment
+### FastASSET merging and allele handling
 
-The first observed allele pair for each SNP establishes its reference
-orientation.
+For VCF/BCF inputs, FastASSET merges on `CHR_POS_REF_ALT`. Because the ordered
+REF/ALT pair is already part of that identifier and GWAS-VCF effects are defined
+relative to ALT, no second cross-trait allele comparison or sign flip is
+performed. `fastasset_variant_id_map.tsv.gz` links every canonical ID back to
+trait, rsID, chromosome, position, REF and ALT.
+
+For tabular inputs, the first observed allele pair for each SNP establishes its
+reference orientation:
 
 | Incoming pair | Action |
 |---|---|
@@ -259,6 +283,7 @@ count to `((traits+1)*(traits+2)/2)+1`. Munging can use multiple workers, but
 | `*_direction_limit_exceeded.tsv.gz` | SNPs skipped because the screened-trait guard was exceeded; analysis continues for other SNPs |
 | `*_fastasset_summary.tsv` | Counts by QC status and severity |
 | `manifest_ldsc_trait_match.tsv` | Common traits and traits missing from either the manifest or LDSC, with retained analysis order |
+| `fastasset_variant_id_map.tsv.gz` | VCF `FASTASSET_ID` to original rsID and locus/allele mapping, by trait |
 | `fastasset_failed_allele_alignments.tsv` | Every excluded incompatible SNP–trait observation |
 | `*_LDSCoutput.RData` | Automatically generated GenomicSEM LDSC object |
 | `trait_correlation_normalized.tsv.gz` | Normalized and reordered correlation used by FastASSET |
@@ -277,7 +302,7 @@ If dependencies are already installed:
 ```bash
 R CMD INSTALL .
 # or
-R CMD INSTALL release/fastASSETcli_0.5.0.tar.gz
+R CMD INSTALL release/fastASSETcli_0.5.1.tar.gz
 ```
 
 ## Scientific behavior in one place
@@ -303,7 +328,7 @@ scientific rationale and severity of each correction.
 
 ## Release archive
 
-`release/fastASSETcli_0.5.0.tar.gz` is the current installable source archive.
+`release/fastASSETcli_0.5.1.tar.gz` is the current installable source archive.
 Earlier archives remain available for reproducibility.
 
 ## Upstream terms

@@ -56,19 +56,30 @@ read_manifest_trait_for_fastasset <- function(manifest_row, params) {
     stop("Internal error: the resolved manifest row has no prepared FILE value.")
   }
   binary <- !is.na(manifest_row[["population_prev"]][1L])
-  source_format <- manifest_row[["source_format"]][1L]
+  source_format <- as.character(manifest_row[["source_format"]][1L])
+  is_vcf <- identical(source_format, "VCF")
   header <- names(data.table::fread(
     file, nrows = 0L, check.names = FALSE, showProgress = FALSE
   ))
   if (length(header) == 0L) stop("Summary-statistic file has no header: ", file)
 
-  mapping <- if (identical(source_format, "VCF")) list() else {
+  mapping <- if (is_vcf) list() else {
     params$munge_column_map
   }
-  snp_column <- summary_column_from_map(
-    header, mapping, "SNP",
-    c("SNP", "ID", "RSID", "MARKERNAME", "MARKER_NAME"), "SNP/ID"
-  )
+  snp_column <- if (is_vcf) {
+    if (!"FASTASSET_ID" %in% header) {
+      stop(
+        "Prepared VCF table is missing the FASTASSET_ID column: ", file,
+        ". Rebuild the prepared-input cache with the current fastASSETcli version."
+      )
+    }
+    "FASTASSET_ID"
+  } else {
+    summary_column_from_map(
+      header, mapping, "SNP",
+      c("SNP", "ID", "RSID", "MARKERNAME", "MARKER_NAME"), "SNP/ID"
+    )
+  }
   a1_column <- summary_column_from_map(
     header, mapping, "A1",
     c("A1", "EA", "EFFECT_ALLELE", "ALT"), "effect allele (A1)"
@@ -137,7 +148,8 @@ read_manifest_trait_for_fastasset <- function(manifest_row, params) {
 
   selected <- c(
     snp_column, a1_column, a2_column, beta_column, se_column,
-    ncase_column, ncontrol_column, n_column
+    ncase_column, ncontrol_column, n_column,
+    if (is_vcf) c("SNP", "CHR", "POS") else character()
   )
   selected <- unique(selected[!is.na(selected)])
   table <- data.table::fread(
@@ -164,7 +176,8 @@ read_manifest_trait_for_fastasset <- function(manifest_row, params) {
   if (anyDuplicated(id)) {
     duplicates <- unique(id[duplicated(id)])
     stop(
-      "Trait '", trait, "' contains duplicate SNP IDs: ",
+      "Trait '", trait, "' contains duplicate ",
+      if (is_vcf) "FASTASSET_ID values" else "SNP IDs", ": ",
       paste(utils::head(duplicates, 10L), collapse = ", "),
       if (length(duplicates) > 10L) " ..." else "", ". File: ", file
     )
@@ -207,11 +220,29 @@ read_manifest_trait_for_fastasset <- function(manifest_row, params) {
     }
   }
 
+  variant_map <- if (is_vcf) {
+    data.table::data.table(
+      trait = rep(trait, nrow(table)),
+      FASTASSET_ID = id,
+      RSID = trimws(as.character(table[["SNP"]])),
+      CHR = as.character(table[["CHR"]]),
+      POS = as.numeric(table[["POS"]]),
+      REF = a2,
+      ALT = a1
+    )
+  } else {
+    data.table::data.table(
+      trait = character(), FASTASSET_ID = character(), RSID = character(),
+      CHR = character(), POS = numeric(), REF = character(), ALT = character()
+    )
+  }
+
   list(
     table = data.table::data.table(
       ID = id, A1 = a1, A2 = a2,
       Beta = beta, SE = se, NEF = neff
     ),
+    variant_map = variant_map,
     audit = data.table::data.table(
       order = manifest_row[["order"]][1L],
       trait = trait,
@@ -221,6 +252,16 @@ read_manifest_trait_for_fastasset <- function(manifest_row, params) {
       trait_type = if (binary) "binary" else "quantitative",
       input_rows = nrow(table),
       snp_column = snp_column,
+      fastasset_id_source = if (is_vcf) {
+        "normalized_CHR_POS_REF_ALT"
+      } else {
+        snp_column
+      },
+      allele_handling = if (is_vcf) {
+        "SKIPPED_VCF_ID_ENCODES_REF_ALT"
+      } else {
+        "CHECKED_AND_HARMONIZED"
+      },
       a1_column = a1_column,
       a2_column = a2_column,
       beta_column = beta_column,
@@ -230,10 +271,12 @@ read_manifest_trait_for_fastasset <- function(manifest_row, params) {
   )
 }
 
-append_fastasset_trait <- function(master, incoming, trait) {
+append_fastasset_trait <- function(master, incoming, trait,
+                                   allele_encoded_id = FALSE) {
   exact_matches <- 0L
   swapped_matches <- 0L
   incompatible_matches <- 0L
+  skipped_allele_checks <- 0L
   incompatible_positions <- integer()
   failed_alignments <- data.table::data.table(
     trait = character(),
@@ -261,34 +304,38 @@ append_fastasset_trait <- function(master, incoming, trait) {
     flipped <- rep(FALSE, nrow(incoming))
     if (any(existing)) {
       existing_positions <- which(existing)
-      reference_a1 <- master[["reference_A1"]][index[existing]]
-      reference_a2 <- master[["reference_A2"]][index[existing]]
-      exact <- incoming[["A1"]][existing] == reference_a1 &
-        incoming[["A2"]][existing] == reference_a2
-      swapped <- incoming[["A1"]][existing] == reference_a2 &
-        incoming[["A2"]][existing] == reference_a1
-      incompatible <- !(exact | swapped)
-      exact_matches <- sum(exact)
-      swapped_matches <- sum(swapped)
-      incompatible_matches <- sum(incompatible)
-      if (any(incompatible)) {
-        incompatible_positions <- existing_positions[incompatible]
-        failed_alignments <- data.table::data.table(
-          trait = rep(as.character(trait), incompatible_matches),
-          ID = incoming[["ID"]][incompatible_positions],
-          input_row = as.integer(incompatible_positions),
-          reference_A1 = reference_a1[incompatible],
-          reference_A2 = reference_a2[incompatible],
-          incoming_A1 = incoming[["A1"]][incompatible_positions],
-          incoming_A2 = incoming[["A2"]][incompatible_positions],
-          reason = rep("INCOMPATIBLE_ALLELES", incompatible_matches),
-          action = rep(
-            "BETA_SE_NEF_SET_TO_NA_TRAIT_EXCLUDED_FOR_SNP",
-            incompatible_matches
+      if (isTRUE(allele_encoded_id)) {
+        skipped_allele_checks <- length(existing_positions)
+      } else {
+        reference_a1 <- master[["reference_A1"]][index[existing]]
+        reference_a2 <- master[["reference_A2"]][index[existing]]
+        exact <- incoming[["A1"]][existing] == reference_a1 &
+          incoming[["A2"]][existing] == reference_a2
+        swapped <- incoming[["A1"]][existing] == reference_a2 &
+          incoming[["A2"]][existing] == reference_a1
+        incompatible <- !(exact | swapped)
+        exact_matches <- sum(exact)
+        swapped_matches <- sum(swapped)
+        incompatible_matches <- sum(incompatible)
+        if (any(incompatible)) {
+          incompatible_positions <- existing_positions[incompatible]
+          failed_alignments <- data.table::data.table(
+            trait = rep(as.character(trait), incompatible_matches),
+            ID = incoming[["ID"]][incompatible_positions],
+            input_row = as.integer(incompatible_positions),
+            reference_A1 = reference_a1[incompatible],
+            reference_A2 = reference_a2[incompatible],
+            incoming_A1 = incoming[["A1"]][incompatible_positions],
+            incoming_A2 = incoming[["A2"]][incompatible_positions],
+            reason = rep("INCOMPATIBLE_ALLELES", incompatible_matches),
+            action = rep(
+              "BETA_SE_NEF_SET_TO_NA_TRAIT_EXCLUDED_FOR_SNP",
+              incompatible_matches
+            )
           )
-        )
+        }
+        flipped[existing_positions[swapped]] <- TRUE
       }
-      flipped[existing_positions[swapped]] <- TRUE
     }
 
     novel <- which(is.na(index))
@@ -327,21 +374,32 @@ append_fastasset_trait <- function(master, incoming, trait) {
     exact_matches = exact_matches,
     swapped_matches = swapped_matches,
     incompatible_matches = incompatible_matches,
+    skipped_allele_checks = skipped_allele_checks,
     failed_alignments = failed_alignments
   )
 }
 
 build_manifest_fastasset_input <- function(manifest, params, output_file,
                                            audit_file, allele_file,
-                                           failed_file) {
+                                           failed_file,
+                                           variant_map_file = file.path(
+                                             dirname(output_file),
+                                             "fastasset_variant_id_map.tsv.gz"
+                                           )) {
   master <- NULL
   audit_rows <- vector("list", nrow(manifest))
   failed_rows <- vector("list", nrow(manifest))
+  variant_map_rows <- vector("list", nrow(manifest))
   for (row in seq_len(nrow(manifest))) {
     manifest_row <- lapply(manifest, function(column) column[row])
     trait_input <- read_manifest_trait_for_fastasset(manifest_row, params)
     appended <- append_fastasset_trait(
-      master, trait_input$table, manifest[["trait"]][row]
+      master,
+      trait_input$table,
+      manifest[["trait"]][row],
+      allele_encoded_id = identical(
+        as.character(manifest[["source_format"]][row]), "VCF"
+      )
     )
     master <- appended$master
     trait_input$audit[["allele_flips_to_reference"]] <- appended$allele_flips
@@ -353,7 +411,10 @@ build_manifest_fastasset_input <- function(manifest, params, output_file,
       appended$swapped_matches
     trait_input$audit[["incompatible_allele_matches"]] <-
       appended$incompatible_matches
+    trait_input$audit[["allele_checks_skipped_id_encodes_ref_alt"]] <-
+      appended$skipped_allele_checks
     audit_rows[[row]] <- trait_input$audit
+    variant_map_rows[[row]] <- trait_input$variant_map
     failed_rows[[row]] <- data.table::copy(appended$failed_alignments)
     failed_rows[[row]][["source_file"]] <- rep(
       as.character(manifest[["source_file"]][row]),
@@ -396,6 +457,10 @@ build_manifest_fastasset_input <- function(manifest, params, output_file,
   analysis_input <- master[, analysis_columns, with = FALSE]
   write_generated_table(analysis_input, output_file)
   write_generated_table(allele_reference, allele_file)
+  variant_map <- data.table::rbindlist(
+    variant_map_rows, use.names = TRUE, fill = TRUE
+  )
+  write_generated_table(variant_map, variant_map_file)
   data.table::fwrite(
     data.table::rbindlist(audit_rows, use.names = TRUE, fill = TRUE),
     audit_file, sep = "\t", quote = FALSE, na = "NA"
@@ -415,6 +480,8 @@ build_manifest_fastasset_input <- function(manifest, params, output_file,
   list(
     path = normalizePath(output_file, mustWork = TRUE),
     n_snps = nrow(master),
+    n_variant_map_rows = nrow(variant_map),
+    variant_map_file = normalizePath(variant_map_file, mustWork = TRUE),
     n_failed_alignments = nrow(failed_table),
     failed_alignment_file = normalizePath(failed_file, mustWork = TRUE)
   )
@@ -431,7 +498,7 @@ manifest_input_signature <- function(params, manifest) {
     )
   }
   make_text_signature(c(
-    "manifest_input_version=2026-08-16-v6-trait-named-vcf-files",
+    "manifest_input_version=2026-08-16-v7-vcf-fastasset-variant-id",
     paste0("traits=", paste(manifest[["trait"]], collapse = ";")),
     paste0("source_format=", paste(manifest[["source_format"]], collapse = ";")),
     paste0("vcf_sample=", paste(manifest[["vcf_sample"]], collapse = ";")),
@@ -470,6 +537,9 @@ prepare_manifest_analysis_input <- function(params, manifest = NULL) {
     preparation_dir, paste0(params$run_name, "_fastasset_wide.tsv.gz")
   )
   allele_file <- file.path(preparation_dir, "fastasset_allele_reference.tsv.gz")
+  variant_map_file <- file.path(
+    preparation_dir, "fastasset_variant_id_map.tsv.gz"
+  )
   audit_file <- file.path(preparation_dir, "fastasset_input_build_audit.tsv")
   failed_file <- file.path(
     preparation_dir, "fastasset_failed_allele_alignments.tsv"
@@ -479,8 +549,8 @@ prepare_manifest_analysis_input <- function(params, manifest = NULL) {
   completion_file <- file.path(preparation_dir, "input_preparation.complete")
 
   complete <- all(file.exists(c(
-    analysis_file, allele_file, audit_file, failed_file, resolved_manifest_file,
-    provenance_file, completion_file
+    analysis_file, allele_file, variant_map_file, audit_file, failed_file,
+    resolved_manifest_file, provenance_file, completion_file
   ))) && identical(
     trimws(readLines(completion_file, warn = FALSE)[1L]), signature
   )
@@ -499,6 +569,7 @@ prepare_manifest_analysis_input <- function(params, manifest = NULL) {
       signature = signature,
       bcftools = provenance[["bcftools"]],
       bcftools_version = provenance[["bcftools_version"]],
+      variant_map_file = normalizePath(variant_map_file, mustWork = TRUE),
       failed_alignment_file = normalizePath(failed_file, mustWork = TRUE),
       reused = TRUE
     ))
@@ -509,7 +580,8 @@ prepare_manifest_analysis_input <- function(params, manifest = NULL) {
   )
   manifest <- vcf_preparation$manifest
   built <- build_manifest_fastasset_input(
-    manifest, params, analysis_file, audit_file, allele_file, failed_file
+    manifest, params, analysis_file, audit_file, allele_file, failed_file,
+    variant_map_file
   )
   data.table::fwrite(
     manifest, resolved_manifest_file,
@@ -525,9 +597,12 @@ prepare_manifest_analysis_input <- function(params, manifest = NULL) {
       fastasset_neff_quantitative = "NEF/total analyzed N used directly",
       fastasset_neff_binary = "NCASE*NCONTROL/(NCASE+NCONTROL)",
       allele_policy = paste(
-        "exact pair retained; swapped pair flips BETA; incompatible",
+        "VCF: FASTASSET_ID=CHR_POS_REF_ALT and no cross-trait allele check;",
+        "TABLE: exact pair retained, swapped pair flips BETA, incompatible",
         "SNP-trait pair has BETA/SE/NEF set to NA and is logged"
       ),
+      number_variant_map_rows = built$n_variant_map_rows,
+      fastasset_variant_id_map = built$variant_map_file,
       number_failed_allele_alignments = built$n_failed_alignments,
       failed_allele_alignment_file = built$failed_alignment_file,
       bcftools = vcf_preparation$bcftools,
@@ -547,6 +622,7 @@ prepare_manifest_analysis_input <- function(params, manifest = NULL) {
     signature = signature,
     bcftools = vcf_preparation$bcftools,
     bcftools_version = vcf_preparation$bcftools_version,
+    variant_map_file = built$variant_map_file,
     failed_alignment_file = built$failed_alignment_file,
     reused = FALSE
   )

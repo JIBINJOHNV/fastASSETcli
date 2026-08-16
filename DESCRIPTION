@@ -1,7 +1,7 @@
 Package: fastASSETcli
 Type: Package
 Title: Reference-Aligned FastASSET Command-Line Pipeline
-Version: 0.5.0
+Version: 0.5.1
 Authors@R: person("Jibin", "John", role = c("aut", "cre"),
     email = "69025183+JIBINJOHNV@users.noreply.github.com")
 Description: Runs a reference-aligned fastASSET workflow for large collections
@@ -9,7 +9,8 @@ Description: Runs a reference-aligned fastASSET workflow for large collections
     object or generate one from a validated summary-statistic manifest
     containing tabular or GWAS-VCF inputs. The manifest is the only
     summary-statistic input and is converted internally to the required
-    multi-trait FastASSET table. The workflow restores and audits
+    multi-trait FastASSET table, using allele-encoded variant identifiers for
+    VCF inputs while retaining original rsIDs for LDSC. The workflow restores and audits
     trait labels, reorders the intercept covariance matrix,
     normalizes it to a trait correlation matrix, performs directional fastASSET
     subset testing with the published closed-form handling for single-trait

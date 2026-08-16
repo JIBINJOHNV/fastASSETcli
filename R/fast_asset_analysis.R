@@ -716,6 +716,7 @@ run_asset_pipeline <- function(params) {
   params$analysis_input <- prepared_input$path
   params$input_preparation_dir <- prepared_input$preparation_dir
   params$input_preparation_signature <- prepared_input$signature
+  params$variant_map_file <- prepared_input$variant_map_file
   params$failed_alignment_file <- prepared_input$failed_alignment_file
 
   input_header <- names(data.table::fread(
@@ -843,7 +844,8 @@ run_asset_pipeline <- function(params) {
       "number_manifest_traits", "number_ldsc_traits",
       "number_common_traits", "sumstats_manifest", "analysis_input",
       "input_preparation_dir", "input_preparation_signature",
-      "failed_alignment_file", "manifest_ldsc_trait_match_file"
+      "variant_map_file", "failed_alignment_file",
+      "manifest_ldsc_trait_match_file"
     ),
     value = as.character(c(
       signature, length(columns$traits), columns$sample_size_suffix,
@@ -857,7 +859,8 @@ run_asset_pipeline <- function(params) {
       ldsc_extraction$n_ldsc_traits, ldsc_extraction$n_analysis_traits,
       params$sumstats_manifest, params$analysis_input,
       params$input_preparation_dir, params$input_preparation_signature,
-      params$failed_alignment_file, analysis_trait_match_file
+      params$variant_map_file, params$failed_alignment_file,
+      analysis_trait_match_file
     ))
   )
   data.table::fwrite(
@@ -878,6 +881,7 @@ run_asset_pipeline <- function(params) {
   outputs$ldsc_generation_dir <- params$ldsc_generation_dir
   outputs$analysis_input <- params$analysis_input
   outputs$input_preparation_dir <- params$input_preparation_dir
+  outputs$variant_map_file <- params$variant_map_file
   outputs$failed_alignment_file <- params$failed_alignment_file
   outputs$trait_match_file <- analysis_trait_match_file
 
