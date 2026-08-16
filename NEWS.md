@@ -1,11 +1,12 @@
 # fastASSETcli 0.4.6
 
-- Made every temporary `bcftools query` table self-describing by requesting a
-  header directly from bcftools. Interrupted conversions can now be inspected
-  with ordinary tools such as `head` without relying on positional knowledge.
-- Added a dedicated header-aware query reader that validates the field count
-  and replaces bcftools's sample-specific display labels with the canonical
-  package column schema in memory. This avoids rewriting large temporary files.
+- Made every temporary `bcftools query` table self-describing by writing one
+  canonical tab-separated header before appending bcftools's data stream.
+  Interrupted conversions can now be inspected with ordinary tools such as
+  `head` without relying on positional knowledge.
+- Added a dedicated header-aware query reader that validates both the field
+  count and canonical names. The large data stream is written only once; no
+  second pass or full-file rewrite is required.
 
 # fastASSETcli 0.4.5
 

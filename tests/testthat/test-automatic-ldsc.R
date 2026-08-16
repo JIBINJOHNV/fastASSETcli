@@ -377,16 +377,14 @@ test_that("VCF valid-row filtering is independent of the input table class", {
   expect_equal(converted$table$N, 32867)
 })
 
-test_that("header-aware bcftools query parsing restores canonical names", {
+test_that("header-aware bcftools query parsing validates canonical names", {
   query_file <- tempfile("bcftools_query_", fileext = ".tsv")
   writeLines(
     c(
       paste(
         c(
-          "#[1]CHROM", "[2]POS", "[3]ID", "[4]REF", "[5]ALT",
-          "[6]trait:ES", "[7]trait:SE", "[8]trait:LP",
-          "[9]trait:AF", "[10]trait:NEF", "[11]trait:SS",
-          "[12]trait:SI"
+          "CHR", "POS", "SNP", "REF", "ALT", "ES", "SE", "LP", "AF",
+          "NEF", "SS", "SI"
         ),
         collapse = "\t"
       ),

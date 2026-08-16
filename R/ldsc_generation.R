@@ -316,6 +316,27 @@ run_bcftools_to_file <- function(executable, arguments, output, label) {
   invisible(output)
 }
 
+run_bcftools_append_to_file <- function(executable, arguments, output, label) {
+  stderr_file <- paste0(output, ".stderr")
+  on.exit(unlink(stderr_file, force = TRUE), add = TRUE)
+  command <- paste(
+    c(shQuote(executable), arguments, ">>", shQuote(output)),
+    collapse = " "
+  )
+  status <- suppressWarnings(system2(
+    "/bin/sh",
+    c("-c", shQuote(command)),
+    stdout = FALSE,
+    stderr = stderr_file,
+    wait = TRUE
+  ))
+  if (length(status) == 0L || is.null(status)) status <- 0L
+  if (!identical(as.integer(status), 0L)) {
+    stop(bcftools_failure_message(label, status, stderr_file))
+  }
+  invisible(output)
+}
+
 run_bcftools_lines <- function(executable, arguments, label) {
   output <- tempfile("fastasset_bcftools_")
   on.exit(unlink(output, force = TRUE), add = TRUE)
@@ -569,10 +590,13 @@ read_bcftools_query_output <- function(path, expected_columns, source_file) {
       ". Expected columns: ", paste(expected_columns, collapse = ", "), "."
     )
   }
-  # bcftools labels queried FORMAT fields with the selected sample and may add
-  # numeric column prefixes. The extraction order has already been validated,
-  # so replace those display labels with the package's canonical schema.
-  data.table::setnames(query, expected_columns)
+  if (!identical(names(query), expected_columns)) {
+    stop(
+      "Internal bcftools-query header mismatch for ", source_file,
+      ". Observed: ", paste(names(query), collapse = ", "),
+      ". Expected: ", paste(expected_columns, collapse = ", "), "."
+    )
+  }
   query
 }
 
@@ -680,16 +704,21 @@ prepare_one_vcf_summary <- function(source_file, requested_sample,
   )
   raw_output <- paste0(output_file, ".bcftools-query-", Sys.getpid(), ".tsv")
   on.exit(unlink(raw_output, force = TRUE), add = TRUE)
-  run_bcftools_to_file(
+  expected_columns <- c("CHR", "POS", "SNP", "REF", "ALT", queried_fields)
+  writeLines(
+    paste(expected_columns, collapse = "\t"),
+    raw_output,
+    useBytes = TRUE
+  )
+  run_bcftools_append_to_file(
     bcftools,
     c(
-      "query", "--print-header", "--samples", shQuote(sample), "--format",
+      "query", "--samples", shQuote(sample), "--format",
       shQuote(query_format), shQuote(source_file)
     ),
     raw_output,
     paste0("bcftools query for ", source_file)
   )
-  expected_columns <- c("CHR", "POS", "SNP", "REF", "ALT", queried_fields)
   query <- read_bcftools_query_output(
     raw_output, expected_columns, source_file
   )
